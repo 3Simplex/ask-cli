@@ -11,15 +11,15 @@ from rich.spinner import Spinner
 CONF_DIR = os.path.expanduser("~/.config/ask")
 DATA_DIR = os.path.expanduser("~/.local/share/ask")
 THREAD_DIR = os.path.join(DATA_DIR, "threads")
-TASK_DIR = os.path.join(DATA_DIR, "tasks")
+ROUTINE_DIR = os.path.join(DATA_DIR, "routines")
 PREF_FILE = os.path.join(CONF_DIR, "preferences.json")
 API_URL, API_KEY = "http://localhost:8080/v1/chat/completions", "KEY"
-TIMEOUT, MAX_RESULT_CHARS = 120, 5000
+TIMEOUT, MAX_RESULT_CHARS = 120, 16768
 console = Console()
 
 os.makedirs(CONF_DIR, exist_ok=True)
 os.makedirs(THREAD_DIR, exist_ok=True)
-os.makedirs(TASK_DIR, exist_ok=True)
+os.makedirs(ROUTINE_DIR, exist_ok=True)
 
 def get_identity_prompt(interactive_on, memory_active):
     os_info = subprocess.getoutput("grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '\"'")
@@ -37,17 +37,16 @@ def get_identity_prompt(interactive_on, memory_active):
     
     return f"""
 ### CORE IDENTITY ###
-You are 'Ask', a professional Linux CLI assistant for {os_info}. 
+You are 'ask', a professional Linux CLI assistant for {os_info}.
 Current Shell: {shell_info}
 Current Operational State: {mode_label} | {mem_label}
 User Status: {admin}
 
 ### NIXOS CONSTRAINTS (MANDATORY) ###
-1. NEVER suggest `apt`, `pacman`, `yay`, `dnf`, or `brew`.
-2. Software is managed declaratively via `/etc/nixos/configuration.nix` or flakes. 
-3. For temporarily executing tools without installing them, ALWAYS suggest `nix-shell -p <pkg>` or `nix run nixpkgs#<pkg>`.
-4. Preferences: {prefs.get('system_preference', 'None')}
-5. Tool Usage: {"ENABLED. Use TOOL: {{'name': '...', ...}} blocks." if interactive_on else "DISABLED. Do NOT use tools. Guide the user manually."}
+1. Software is managed declaratively via `/etc/nixos/configuration.nix` or flakes.
+2. For temporarily executing tools without installing them, ALWAYS suggest `nix-shell -p <pkg>` or `nix run nixpkgs#<pkg>`.
+3. Preferences: {prefs.get('system_preference', 'None')}
+4. Tool Usage: {"ENABLED. Use TOOL: {{'name': '...', ...}} blocks." if interactive_on else "DISABLED. Do NOT use tools. Guide the user manually."}
 
 ### TOOL DEFINITIONS (Interactive Mode Only) ###
 - TOOL: {{"name": "run", "command": "..."}} -> Execute and SEE output. Use for "what is the status" or small system checks where you need to ingest the data.
@@ -56,7 +55,6 @@ User Status: {admin}
 - TOOL: {{"name": "read", "url": "..."}} -> Read webpage content.
 
 ### GROUNDING RULES ###
-- Never hallucinate command output.
 - If memory is INACTIVE, act as if this is the first time meeting the user.
 - If memory is ACTIVE, continue the previous context naturally.
 """
@@ -92,14 +90,14 @@ def main():
     parser.add_argument("query", nargs="*", help="Your question")
     parser.add_argument("-i", "--interactive", action="store_true", help="Enable tool usage")
     parser.add_argument("-c", "--continue-last", action="store_true", help="Resume last session")
-    parser.add_argument("-t", "--task", help="Load a task playbook")
+    parser.add_argument("-r", "--routine", help="Load a routine playbook")
     args = parser.parse_args()
 
     latest_file = None
     files = glob.glob(os.path.join(THREAD_DIR, "*.json"))
     if files:
         latest_file = max(files, key=os.path.getmtime)
-        if not args.continue_last and not args.task and (time.time() - os.path.getmtime(latest_file)) < 600:
+        if not args.continue_last and not args.routine and (time.time() - os.path.getmtime(latest_file)) < 600:
             console.print("[dim italic]💡 Hint: Use '-c' to continue your recent conversation.[/dim italic]")
 
     messages =[]
@@ -116,11 +114,11 @@ def main():
     else:
         messages[0]["content"] = get_identity_prompt(args.interactive, memory_active)
 
-    if args.task:
-        tpath = os.path.join(TASK_DIR, f"{args.task}.md")
+    if args.routine:
+        tpath = os.path.join(ROUTINE_DIR, f"{args.routine}.md")
         if os.path.exists(tpath):
             with open(tpath, 'r') as f:
-                messages.append({"role": "user", "content": f"START TASK PLAYBOOK:\n{f.read()}"})
+                messages.append({"role": "user", "content": f"START ROUTINE PLAYBOOK:\n{f.read()}"})
 
     user_query = " ".join(args.query).strip()
     piped_data = ""
@@ -133,7 +131,7 @@ def main():
         else:
             user_query = piped_data
 
-    if not user_query and not args.task and not args.continue_last:
+    if not user_query and not args.routine and not args.continue_last:
         console.print(Panel("[bold cyan]Ask CLI[/bold cyan]\n'ask -t tutorial' to begin.", expand=False))
         return
 
