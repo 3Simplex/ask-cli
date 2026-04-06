@@ -132,7 +132,7 @@ def main():
             user_query = piped_data
 
     if not user_query and not args.routine and not args.continue_last:
-        console.print(Panel("[bold cyan]Ask CLI[/bold cyan]\n'ask -t tutorial' to begin.", expand=False))
+        console.print(Panel("[bold cyan]Ask CLI[/bold cyan]\n'ask -r tutorial' to begin.", expand=False))
         return
 
     if user_query: 
