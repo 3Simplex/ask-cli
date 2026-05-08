@@ -20,6 +20,6 @@ pkgs.stdenv.mkDerivation {
     
     # This securely wraps the binary so it always has access to its tools
     wrapProgram $out/bin/ask \
-      --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.glow pkgs.ddgr pkgs.lynx pkgs.less ]}
+      --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.glow pkgs.ddgr pkgs.lynx pkgs.less pkgs.bubblewrap ]}
   '';
 }
