@@ -13,8 +13,8 @@
     in {
       # This defines the "Package" output of the card
       packages = forAllSystems (system: {
-        # FIXED: Added parentheses to ensure Nix calls the function first
-        default = (pkgsFor system).callPackage ./default.nix { };
+        ask-cli = (pkgsFor system).callPackage ./default.nix { };
+        default = self.packages.${system}.ask-cli;
       });
 
       # This allows you to run it directly with 'nix run'
