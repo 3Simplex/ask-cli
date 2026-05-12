@@ -11,10 +11,17 @@ pkgs.stdenv.mkDerivation {
   nativeBuildInputs = [ pkgs.makeWrapper ];
 
   installPhase = ''
-    mkdir -p $out/bin
+    mkdir -p $out/bin $out/lib/python3.12/site-packages/ask
     cp ask.py $out/bin/ask
+    cp -r ask/* $out/lib/python3.12/site-packages/ask/
     chmod +x $out/bin/ask
     
+    # Add the site-packages to PYTHONPATH
+    makeWrapper $out/bin/ask $out/bin/ask-wrapped \
+      --prefix PYTHONPATH : $out/lib/python3.12/site-packages
+
+    mv $out/bin/ask-wrapped $out/bin/ask
+
     # This fixes the #!/usr/bin/env python3 shebang to use the Nix store Python
     patchShebangs $out/bin/ask
     
