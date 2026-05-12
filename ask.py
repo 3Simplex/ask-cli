@@ -72,6 +72,23 @@ os.makedirs(ROUTINE_DIR, exist_ok=True)
 def gen_id(prefix="msg"):
     return f"{prefix}_{uuid.uuid4().hex[:6]}"
 
+def sync_thread_file(filepath, msgs):
+    if not filepath: return
+    try:
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r') as f: disk_msgs = json.load(f)
+            except: disk_msgs =[]
+            existing_ids = {m.get('id') for m in msgs if m.get('id')}
+            for m in disk_msgs:
+                if m.get('id') and m.get('id') not in existing_ids:
+                    msgs.append(m)
+        temp_file = filepath + ".tmp"
+        with open(temp_file, 'w') as f: json.dump(msgs, f)
+        os.replace(temp_file, filepath)
+    except Exception as e:
+        pass
+
 def detect_server_capabilities():
     try:
         r = requests.get(API_MODELS_URL, headers={"Authorization": f"Bearer {API_KEY}"}, timeout=3)
@@ -227,8 +244,8 @@ def main():
     parser.add_argument("-i", "--interactive", action="store_true", help="Enable tool usage")
     parser.add_argument("-a", "--auto", action="store_true", help="Auto-approve commands if Watcher passes")
     parser.add_argument("-s", "--sandbox", action="store_true", help="Wrap commands in a secure Bubblewrap sandbox")
-    parser.add_argument("-c", "--continue-last", action="store_true", help="Resume last session")
-    parser.add_argument("-r", "--routine", help="Load a routine playbook")
+    parser.add_argument("-c", "--continue-session", dest="continue_session", metavar="SESSION_NAME", nargs="?", const="LIST", default=None, help="List sessions (no args), resume a session by name, or create a new named session. Falls back to LAST session if no name matched and no distinct query given.")
+    parser.add_argument("-r", "--routine", nargs="?", const="LIST", help="Load a routine playbook. Use without args to list.")
     parser.add_argument("-img", "--image", action="append", help="Path to image to include")
     args = parser.parse_args()
     global AUTO_APPROVE
@@ -238,34 +255,6 @@ def main():
 
     is_multimodal, model_name = detect_server_capabilities()
 
-    latest_file = None
-    files = glob.glob(os.path.join(THREAD_DIR, "*.json"))
-    if files:
-        latest_file = max(files, key=os.path.getmtime)
-        if not args.continue_last and not args.routine and (time.time() - os.path.getmtime(latest_file)) < 600:
-            console.print("[dim italic]💡 Hint: Use '-c' to continue your recent conversation.[/dim italic]")
-
-    internal_msgs =[]
-    memory_active = False
-    if args.continue_last and latest_file:
-        try:
-            with open(latest_file, 'r') as f:
-                internal_msgs = json.load(f)
-                memory_active = True
-        except: console.print("[red]Failed to load thread.[/red]")
-
-    sys_prompt = get_identity_prompt(args.interactive, memory_active, is_multimodal)
-    if not internal_msgs:
-        internal_msgs.append({"id": "sys", "role": "system", "content": sys_prompt, "gc": False})
-    else:
-        internal_msgs[0]["content"] = sys_prompt
-
-    if args.routine:
-        tpath = os.path.join(ROUTINE_DIR, f"{args.routine}.md")
-        if os.path.exists(tpath):
-            with open(tpath, 'r') as f:
-                internal_msgs.append({"id": gen_id("rtn"), "role": "user", "content": f"START ROUTINE PLAYBOOK:\n{f.read()}", "gc": False})
-
     user_query = " ".join(args.query).strip()
     piped_data = ""
     if not sys.stdin.isatty(): piped_data = sys.stdin.read().strip()
@@ -273,7 +262,81 @@ def main():
     if piped_data:
         user_query = f"{user_query}\n\n[PIPED DATA]:\n{piped_data}" if user_query else piped_data
 
-    if not user_query and not args.routine and not args.continue_last:
+    if args.routine == "LIST":
+        routines = glob.glob(os.path.join(ROUTINE_DIR, "*.md"))
+        if routines:
+            console.print(Panel("\n".join([os.path.basename(r)[:-3] for r in routines]), title="Available Routines"))
+        else:
+            console.print("[red]No routines found.[/red]")
+        return
+
+    if args.continue_session == "LIST":
+        sessions = glob.glob(os.path.join(THREAD_DIR, "*.json"))
+        if sessions:
+            sessions.sort(key=os.path.getmtime, reverse=True)
+            lines = [os.path.basename(s)[:-5] for s in sessions[:20]]
+            console.print(Panel("\n".join(lines), title="Recent Sessions (use: ask -c <name>)"))
+        else:
+            console.print("[red]No sessions found.[/red]")
+        return
+
+    latest_file = None
+    files = glob.glob(os.path.join(THREAD_DIR, "*.json"))
+    
+    if args.continue_session and args.continue_session not in["LAST", "LIST"]:
+        matched = glob.glob(os.path.join(THREAD_DIR, f"*{args.continue_session}*.json"))
+        if matched:
+            latest_file = max(matched, key=os.path.getmtime)
+        else:
+            if user_query:
+                # User provided a distinct name AND a query. Treat as a new named session.
+                latest_file = os.path.join(THREAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.continue_session}.json")
+            else:
+                # User provided only one argument after -c, treat it as the query for the LAST session.
+                user_query = args.continue_session
+                args.continue_session = "LAST"
+
+    if args.continue_session == "LAST" and not latest_file and files:
+        latest_file = max(files, key=os.path.getmtime)
+
+    if not args.continue_session and not args.routine and files:
+        last_any = max(files, key=os.path.getmtime)
+        if (time.time() - os.path.getmtime(last_any)) < 600:
+            console.print("[dim italic]💡 Hint: Use '-c' to continue your recent conversation.[/dim italic]")
+
+    internal_msgs =[]
+    memory_active = False
+    
+    if args.continue_session and latest_file:
+        if os.path.exists(latest_file):
+            try:
+                with open(latest_file, 'r') as f:
+                    internal_msgs = json.load(f)
+                    memory_active = True
+            except: 
+                console.print(f"[red]Failed to load thread: {latest_file}[/red]")
+        # If it doesn't exist yet, memory_active remains False (correct for a new named session)
+    else:
+        safe_q = "".join([c if c.isalnum() else "_" for c in (user_query[:30] if isinstance(user_query, str) and user_query else "session")])
+        if not safe_q: safe_q = "session"
+        latest_file = os.path.join(THREAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_q}.json")
+
+    sys_prompt = get_identity_prompt(args.interactive, memory_active, is_multimodal)
+    if not internal_msgs:
+        internal_msgs.append({"id": "sys", "role": "system", "content": sys_prompt, "gc": False})
+    else:
+        internal_msgs[0]["content"] = sys_prompt
+
+    if args.routine and args.routine != "LIST":
+        tpath = os.path.join(ROUTINE_DIR, f"{args.routine}.md")
+        if os.path.exists(tpath):
+            with open(tpath, 'r') as f:
+                internal_msgs.append({"id": gen_id("rtn"), "role": "user", "content": f"START ROUTINE PLAYBOOK:\n{f.read()}", "gc": False})
+        else:
+            console.print(f"[red]Routine '{args.routine}' not found.[/red]")
+            return
+
+    if not user_query and not args.routine and not args.continue_session:
         console.print(Panel("[bold cyan]Ask CLI[/bold cyan]\n'ask -r tutorial' to begin.", expand=False))
         return
 
@@ -296,7 +359,12 @@ def main():
 
         internal_msgs.append({"id": gen_id("usr"), "role": "user", "content": final_content, "gc": False})
 
+    # Save to disk immediately so other processes can see the user prompt
+    sync_thread_file(latest_file, internal_msgs)
+
     while True:
+        # Check disk for injected messages before talking to API
+        sync_thread_file(latest_file, internal_msgs)
         api_messages = build_api_payload(internal_msgs)
 
         with Live(Spinner("dots", text="Thinking...", style="cyan"), transient=True):
@@ -311,26 +379,30 @@ def main():
         content = re.sub(r"^\s*\[ID:[^\]]+\]\s*", "", content)
         ast_id = gen_id("ast")
         internal_msgs.append({"id": ast_id, "role": "assistant", "content": content, "gc": False})
+        
+        # Save assistant text immediately
+        sync_thread_file(latest_file, internal_msgs)
 
         # --- ADVANCED TOOL PARSING (Bilingual) ---
         tool = None
 
-        # 1. Check for standard format
         if "TOOL:" in content:
             if not args.interactive:
                 internal_msgs.append({"id": gen_id("err"), "role": "user", "content": "Error: Tools are DISABLED.", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
                 continue
             try:
                 line =[l for l in content.split('\n') if "TOOL:" in l][0]
                 tool = json.loads(line.split("TOOL:")[1].strip())
             except Exception as e:
                 internal_msgs.append({"id": gen_id("err"), "role": "user", "content": f"Tool Parse Error: {e}", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
                 continue
 
-        # 2. Check for native Gemma / Llama format (e.g., <|tool_call>call:search{query: "..."})
         elif "<|tool_call>" in content or "call:" in content:
             if not args.interactive:
                 internal_msgs.append({"id": gen_id("err"), "role": "user", "content": "Error: Tools are DISABLED.", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
                 continue
             try:
                 match = re.search(r"call:([a-zA-Z0-9_]+)\{([^}]*)\}", content)
@@ -338,13 +410,13 @@ def main():
                     func_name = match.group(1)
                     args_str = match.group(2).strip()
 
-                    # Fix unquoted keys so json.loads doesn't crash (query: "..." -> "query": "...")
                     args_str_fixed = re.sub(r'([a-zA-Z0-9_]+)\s*:', r'"\1":', args_str)
 
                     tool_args = json.loads(f"{{{args_str_fixed}}}") if args_str_fixed else {}
                     tool = {"name": func_name, **tool_args}
             except Exception as e:
                 internal_msgs.append({"id": gen_id("err"), "role": "user", "content": f"Native Tool Parse Error: {e}", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
                 continue
 
         # --- TOOL EXECUTION ---
@@ -377,14 +449,17 @@ def main():
                     res = f"Error: Unknown tool '{tool['name']}'"
 
                 internal_msgs.append({"id": gen_id("res"), "role": "user", "content": f"TOOL RESULT:\n{res}", "gc": False})
+                
+                # Save tool result immediately
+                sync_thread_file(latest_file, internal_msgs)
                 continue
 
             except Exception as e:
                 internal_msgs.append({"id": gen_id("err"), "role": "user", "content": f"Tool Error: {e}", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
                 continue
 
         # --- OUTPUT FORMATTING ---
-        # Strip out the tool metadata so it looks pretty to the user
         clean_content = "\n".join([line for line in content.split("\n") if "TOOL:" not in line and "<|tool_call>" not in line])
 
         try:
@@ -393,10 +468,6 @@ def main():
             from rich.markdown import Markdown
             console.print(Markdown(clean_content))
 
-        # --- SAVE MEMORY ---
-        safe_q = "".join([c if c.isalnum() else "_" for c in (user_query[:30] if isinstance(user_query, str) and user_query else "session")])
-        fname = os.path.join(THREAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_q}.json")
-        with open(fname, 'w') as f: json.dump(internal_msgs, f)
         break
 
 if __name__ == "__main__": main()
