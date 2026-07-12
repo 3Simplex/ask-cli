@@ -15,14 +15,17 @@ THREAD_DIR = os.path.join(DATA_DIR, "threads")
 ROUTINE_DIR = os.path.join(DATA_DIR, "routines")
 PREF_FILE = os.path.join(CONF_DIR, "preferences.json")
 
-API_BASE = "http://localhost:8080/v1"
-API_URL = f"{API_BASE}/chat/completions"
-API_MODELS_URL = f"{API_BASE}/models"
-API_KEY = "KEY"
-
-TIMEOUT, MAX_RESULT_CHARS = 240, 131768
-AUTO_APPROVE = False
-USE_SANDBOX = False
+with open(os.path.join(os.path.dirname(__file__), 'assets', 'config', 'config.json'), 'r') as f: _cfg = json.load(f)
+API_BASE = _cfg['api_base']
+API_URL = f'{API_BASE}/chat/completions'
+API_MODELS_URL = f'{API_BASE}/models'
+API_KEY = _cfg['api_key']
+TIMEOUT = _cfg['timeout']
+MAX_RESULT_CHARS = _cfg['max_result_chars']
+AUTO_APPROVE_DEFAULT = _cfg['auto_approve_default']
+USE_SANDBOX_DEFAULT = _cfg['use_sandbox_default']
+AUTO_APPROVE = AUTO_APPROVE_DEFAULT
+USE_SANDBOX = USE_SANDBOX_DEFAULT
 
 WATCHER_LOG_DIR = os.path.join(DATA_DIR, "security_audit")
 os.makedirs(WATCHER_LOG_DIR, exist_ok=True)
