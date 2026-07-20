@@ -1,7 +1,7 @@
 {
   "api_base": "http://localhost:8080/v1",
   "api_key": "KEY",
-  "timeout": 10,
+  "timeout": 1000,
   "max_result_chars": 131768,
   "auto_approve_default": false,
   "use_sandbox_default": false

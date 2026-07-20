@@ -13,6 +13,7 @@ pkgs.stdenv.mkDerivation {
   installPhase = ''
     mkdir -p $out/bin
     cp ask.py $out/bin/ask
+    cp -r assets $out/bin/
     chmod +x $out/bin/ask
     
     # This fixes the #!/usr/bin/env python3 shebang to use the Nix store Python

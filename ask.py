@@ -15,7 +15,16 @@ THREAD_DIR = os.path.join(DATA_DIR, "threads")
 ROUTINE_DIR = os.path.join(DATA_DIR, "routines")
 PREF_FILE = os.path.join(CONF_DIR, "preferences.json")
 
-with open(os.path.join(os.path.dirname(__file__), 'assets', 'config', 'config.json'), 'r') as f: _cfg = json.load(f)
+CONFIG_SOURCE_DIR = os.environ.get('ASK_CONFIG_DIR')
+if CONFIG_SOURCE_DIR:
+    config_path = os.path.join(CONFIG_SOURCE_DIR, 'config.json')
+else:
+    dir_name = os.path.dirname(__file__)
+    if os.path.exists(os.path.join(dir_name, 'assets')):
+        config_path = os.path.join(dir_name, 'assets', 'config', 'config.json')
+    else:
+        config_path = os.path.join(os.path.dirname(dir_name), 'assets', 'config', 'config.json')
+with open(config_path, 'r') as f: _cfg = json.load(f)
 API_BASE = _cfg['api_base']
 API_URL = f'{API_BASE}/chat/completions'
 API_MODELS_URL = f'{API_BASE}/models'
