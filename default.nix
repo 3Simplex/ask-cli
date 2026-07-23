@@ -4,23 +4,34 @@ pkgs.stdenv.mkDerivation {
   name = "ask-cli-3.0";
   src = ./.;
 
-  buildInputs =[
+  nativeBuildInputs = [ pkgs.makeWrapper ];
+
+  buildInputs = [
     (pkgs.python3.withPackages (ps: with ps; [ requests rich ]))
   ];
 
-  nativeBuildInputs = [ pkgs.makeWrapper ];
-
   installPhase = ''
+    # 1. Setup standard directories
     mkdir -p $out/bin
+    mkdir -p $out/share/ask
+
+    # 2. Separate binary and static assets
     cp ask.py $out/bin/ask
-    cp -r assets $out/bin/
+    cp -r assets $out/share/ask/
     chmod +x $out/bin/ask
-    
-    # This fixes the #!/usr/bin/env python3 shebang to use the Nix store Python
+
+    # 3. Fix Python shebang for the Nix store
     patchShebangs $out/bin/ask
-    
-    # This securely wraps the binary so it always has access to its tools
+
+    # 4. Wrap the program securely
     wrapProgram $out/bin/ask \
-      --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.glow pkgs.ddgr pkgs.lynx pkgs.less pkgs.bubblewrap ]}
+      --set ASK_CONFIG_DIR "$out/share/ask/assets/config" \
+      --prefix PATH : ${pkgs.lib.makeBinPath [
+        pkgs.ddgr         # For the 'search' tool
+        pkgs.lynx         # For the 'read' tool
+        pkgs.bubblewrap   # For the sandboxed 'run' tool
+        pkgs.coreutils    # For cut, tr, groups (identity prompt)
+        pkgs.gnugrep      # For grep (identity prompt)
+      ]}
   '';
 }

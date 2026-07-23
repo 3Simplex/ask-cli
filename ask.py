@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os, sys, json, subprocess, requests, argparse, glob, time, re
-import base64, mimetypes, uuid
+import base64, mimetypes, uuid, asyncio
 from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
@@ -24,6 +24,7 @@ else:
         config_path = os.path.join(dir_name, 'assets', 'config', 'config.json')
     else:
         config_path = os.path.join(os.path.dirname(dir_name), 'assets', 'config', 'config.json')
+
 with open(config_path, 'r') as f: _cfg = json.load(f)
 API_BASE = _cfg['api_base']
 API_URL = f'{API_BASE}/chat/completions'
@@ -31,21 +32,97 @@ API_MODELS_URL = f'{API_BASE}/models'
 API_KEY = _cfg['api_key']
 TIMEOUT = _cfg['timeout']
 MAX_RESULT_CHARS = _cfg['max_result_chars']
-AUTO_APPROVE_DEFAULT = _cfg['auto_approve_default']
-USE_SANDBOX_DEFAULT = _cfg['use_sandbox_default']
-AUTO_APPROVE = AUTO_APPROVE_DEFAULT
-USE_SANDBOX = USE_SANDBOX_DEFAULT
+AUTO_APPROVE = _cfg['auto_approve_default']
+USE_SANDBOX = _cfg['use_sandbox_default']
+SEARCH_TIMEOUT = _cfg.get('search_timeout', 30)
+
+# --- Load State Profiles from states.json ---
+STATES_SOURCE_DIR = os.environ.get('ASK_STATES_DIR')
+if STATES_SOURCE_DIR:
+    STATE_PROFILES_PATH = os.path.join(STATES_SOURCE_DIR, 'states.json')
+else:
+    dir_name = os.path.dirname(__file__)
+    # 1. Try checking adjacent to the script
+    if os.path.exists(os.path.join(dir_name, 'assets')):
+        STATE_PROFILES_PATH = os.path.join(dir_name, 'assets', 'states', 'states.json')
+    # 2. Try looking relative to the config dir (since we know config works!)
+    elif CONFIG_SOURCE_DIR and os.path.exists(os.path.join(os.path.dirname(CONFIG_SOURCE_DIR), 'states', 'states.json')):
+        STATE_PROFILES_PATH = os.path.join(os.path.dirname(CONFIG_SOURCE_DIR), 'states', 'states.json')
+    # 3. Fallback to standard relative path
+    else:
+        STATE_PROFILES_PATH = os.path.join(os.path.dirname(dir_name), 'assets', 'states', 'states.json')
+
+with open(STATE_PROFILES_PATH, 'r') as f:
+    _state_data = json.load(f)
+
+# Build STATE_PROFILES from the JSON
+STATE_PROFILES = {}
+for state_name, state_info in _state_data.items():
+    STATE_PROFILES[state_name] = {
+        "temperature": state_info.get("temperature", 0.1),
+        "max_tokens": -1,
+        "reasoning_budget": state_info.get("reasoning_budget", 0),
+        "desc": state_info.get("description", state_name)
+    }
+
+
+# --- CONCURRENCY LOCKS ---
+ui_lock = asyncio.Lock()
+
+# --- SEARCH RATE LIMITER ---
+class SearchRateLimiter:
+    """Simple token-bucket rate limiter for search queries."""
+    def __init__(self, max_per_minute: int, delay: float, max_concurrent: int):
+        self.max_per_minute = max_per_minute
+        self.delay = delay
+        self.max_concurrent = max_concurrent
+        self._timestamps: list[float] = []
+        self._active = 0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        async with self._lock:
+            now = time.time()
+            self._timestamps = [t for t in self._timestamps if now - t < 60]
+            if len(self._timestamps) >= self.max_per_minute:
+                oldest = self._timestamps[0]
+                wait = 60 - (now - oldest) + self.delay
+                console.print(f"[dim]Waiting {wait:.1f}s for search rate limit...[/dim]")
+            if self._timestamps:
+                last = self._timestamps[-1]
+                wait = self.delay - (now - last)
+                if wait > 0:
+                    console.print(f"[dim]Waiting {wait:.1f}s between searches...[/dim]")
+            self._timestamps.append(time.time())
+            self._active += 1
+        # Sleep OUTSIDE the lock
+        if len(self._timestamps) >= self.max_per_minute:
+            oldest = self._timestamps[0]
+            wait = 60 - (time.time() - oldest) + self.delay
+            await asyncio.sleep(wait)
+        if self._timestamps:
+            last = self._timestamps[-1]
+            wait = self.delay - (time.time() - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+    async def release(self):
+        async with self._lock:
+            self._active -= 1
+watcher_lock = asyncio.Lock()
+
+search_rate_limiter = SearchRateLimiter(
+    max_per_minute=_cfg.get('search_rate_limit', 5),
+    delay=_cfg.get('search_rate_delay', 2.0),
+    max_concurrent=_cfg.get('search_max_concurrent', 1),
+)
 
 WATCHER_LOG_DIR = os.path.join(DATA_DIR, "security_audit")
 os.makedirs(WATCHER_LOG_DIR, exist_ok=True)
 WATCHER_SYSTEM_PROMPT = """You are a high-security command auditor.
-Your sole purpose is to analyze proposed Linux commands for malicious intent,
-unauthorized data exfiltration, or destructive actions.
-
 Evaluate the command based on:
 1. Privilege escalation attempts.
-2. Destructive filesystem operations (e.g., rm -rf /).
-3. Network exfiltration (e.g., curl, wget to unknown IPs).
+2. Destructive filesystem operations.
+3. Network exfiltration.
 4. Obfuscated shell syntax.
 
 Response Format:
@@ -53,121 +130,67 @@ Response Format:
 - If unsafe: 'Reasoning: [Detailed reason] F'
 """
 
-def security_watcher(cmd):
+async def security_watcher(cmd):
     payload = {
         "messages":[
             {"role": "system", "content": WATCHER_SYSTEM_PROMPT},
             {"role": "user", "content": f"Analyze this command: {cmd}"}
-        ]
+        ],
+        "temperature": 0.1,  # 0.1 is slightly safer than 0.0 for some local models
+        "max_tokens": 2048,
+        "reasoning_budget": 2048 # Give it enough room to <think> before outputting P or F!
     }
     try:
-        r = requests.post(API_URL, headers={"Authorization": f"Bearer {API_KEY}"}, json=payload, timeout=180)
-        r.raise_for_status()
-        response_text = r.json()['choices'][0]['message'].get('content', "Reasoning: Error parsing response F")
-        audit_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "command": cmd,
-            "decision": response_text
-        }
+        async with watcher_lock:
+            r = await asyncio.to_thread(
+                requests.post, API_URL,
+                headers={"Authorization": f"Bearer {API_KEY}"},
+                json=payload, timeout=60
+            )
+            r.raise_for_status()
+
+            msg = r.json()['choices'][0]['message']
+            # Fallback chain: try content, then reasoning_content, then default to empty string
+            response_text = msg.get('content') or msg.get('reasoning_content') or ""
+
+            if not response_text.strip():
+                response_text = "Reasoning: Local API returned an empty string. F"
+
         with open(os.path.join(WATCHER_LOG_DIR, "audit_log.jsonl"), "a") as f:
-            f.write(json.dumps(audit_entry) + "\n")
+            f.write(json.dumps({"timestamp": datetime.now().isoformat(), "command": cmd, "decision": response_text}) + "\n")
         return response_text
     except Exception as e:
         return f"Reasoning: Watcher Error ({str(e)}) F"
 
 console = Console()
-
 os.makedirs(CONF_DIR, exist_ok=True)
 os.makedirs(THREAD_DIR, exist_ok=True)
 os.makedirs(ROUTINE_DIR, exist_ok=True)
 
-def gen_id(prefix="msg"):
-    return f"{prefix}_{uuid.uuid4().hex[:6]}"
+def gen_id(prefix="msg"): return f"{prefix}_{uuid.uuid4().hex[:6]}"
 
 def sync_thread_file(filepath, msgs):
     if not filepath: return
     try:
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r') as f: disk_msgs = json.load(f)
-            except: disk_msgs =[]
-            existing_ids = {m.get('id') for m in msgs if m.get('id')}
-            for m in disk_msgs:
-                if m.get('id') and m.get('id') not in existing_ids:
-                    msgs.append(m)
         temp_file = filepath + ".tmp"
         with open(temp_file, 'w') as f: json.dump(msgs, f)
         os.replace(temp_file, filepath)
-    except Exception as e:
-        pass
-
-def detect_server_capabilities():
-    try:
-        r = requests.get(API_MODELS_URL, headers={"Authorization": f"Bearer {API_KEY}"}, timeout=3)
-        if r.status_code == 200:
-            models = r.json().get("data",[])
-            for m in models:
-                name = m.get("id", "").lower()
-                if any(kw in name for kw in["vision", "vl", "llava", "gemma-4", "gemma4", "pixtral"]):
-                    return True, m.get("id")
-            if models: return False, models[0].get("id")
-    except Exception:
-        pass
-    return False, "unknown"
-
-def encode_image(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+    except: pass
 
 def get_identity_prompt(interactive_on, memory_active, is_multimodal):
     os_info = subprocess.getoutput("grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '\"'")
     shell_info = os.environ.get("SHELL", "Unknown Shell")
-    admin = "Administrator (sudo via wheel)" if "wheel" in subprocess.getoutput("groups") else "Standard User"
-
-    prefs = {}
-    if os.path.exists(PREF_FILE):
-        try:
-            with open(PREF_FILE, 'r') as f: prefs = json.load(f)
-        except: pass
-
-    mode_label = "[MODE: INTERACTIVE]" if interactive_on else "[MODE: READ-ONLY / ADVISORY]"
-    mem_label = "[MEMORY LINK: ACTIVE]" if memory_active else "[MEMORY LINK: INACTIVE / FRESH SESSION]"
-    mm_label = "ENABLED" if is_multimodal else "DISABLED"
+    admin = "Administrator" if "wheel" in subprocess.getoutput("groups") else "Standard User"
 
     return f"""
 ### CORE IDENTITY ###
 You are 'ask', an advanced, agentic Linux CLI assistant for {os_info}.
 Current Shell: {shell_info}
-Current Operational State: {mode_label} | {mem_label}
-Multi-modal Capabilities: {mm_label}
+Multi-modal: {"ENABLED" if is_multimodal else "DISABLED"}
 User Status: {admin}
 
-### NIXOS CONSTRAINTS (MANDATORY) ###
-1. Software is managed declaratively via `/etc/nixos/configuration.nix` or flakes.
-2. For temporarily executing tools, ALWAYS suggest `nix-shell -p <pkg>` or `nix run nixpkgs#<pkg>`.
-
-### CONTEXT GARBAGE COLLECTION ###
-You run on a large context model. To prevent context poisoning, you are equipped with a Garbage Collector.
-Each message/tool block in your history is prepended with a metadata ID by the backend before you recieve it. If a conversational tangent is finished, or a large tool output is no longer needed, immediately use the `gc` tool to mark those messages for removal by the garbage collector. You should not write the metadata into a message yourself even if it looks like you should otherwise.
-
-### TOOL DEFINITIONS ###
-{ "Tools are DISABLED in this session." if not interactive_on else """
-- TOOL: {"name": "run", "command": "..."} -> Execute and SEE output.
-- TOOL: {"name": "display", "command": "..."} -> Run and show to USER ONLY via pager. You do NOT see the data.
-- TOOL: {"name": "search", "query": "..."} -> Search DuckDuckGo.
-- TOOL: {"name": "read", "url": "..."} -> Read webpage content.
-- TOOL: {"name": "gc", "ids":["msg_123", "msg_456"]} -> Mark message for garbage collector.
-"""}
-
-### GROUNDING RULES ###
-- If memory is INACTIVE, act as if this is the first time meeting the user.
-- If memory is ACTIVE, continue naturally.
-- You are an AI assistant that can call external tools.
-- To call a tool, you MUST wrap the call between the special tokens:
-
-
-TOOL: {{"name": "", "command": ""}}\n
-
+### CONTEXT LIMITS & MUTATIONS ###
+You run locally. To remain fast, use targeted MUTATIONS. Instead of outputting large rewritten scripts, use your tools to apply small, targeted changes. Use the 'set_state' tool to switch to 'planning' if you need deep thought, and 'execution' when you are ready to act.
 """
 
 def prompt_user(prompt_text):
@@ -177,309 +200,315 @@ def prompt_user(prompt_text):
             return tty.readline().strip()
     return input(prompt_text)
 
-def run_cmd(cmd, silent=False):
-    global AUTO_APPROVE
-    console.print("[dim italic]🛡  Security Watcher is analyzing...[/dim italic]")
-    watch_result = security_watcher(cmd)
-    watcher_passed = watch_result.strip().endswith('P')
+async def async_prompt_user(prompt_text):
+    return await asyncio.to_thread(prompt_user, prompt_text)
+
+async def run_cmd(cmd, silent=False):
+    console.print(f"[dim italic]🛡  Security Watcher analyzing: {cmd[:30]}...[/dim italic]")
+
+    watch_result = await security_watcher(cmd)
+
+    # Bulletproof parsing: strip EVERYTHING except letters, then check the very last letter
+    alpha_chars = re.sub(r'[^a-zA-Z]', '', watch_result.upper())
+    watcher_passed = alpha_chars.endswith('P') if alpha_chars else False
 
     human_passed = False
-    if not silent:
-        if AUTO_APPROVE and watcher_passed:
-            console.print(f"[bold green]⚡ Auto-approved by Watcher:[/bold green] [cyan]{cmd}[/cyan]")
-            human_passed = True
-        else:
-            console.print(Panel(f"[bold yellow]Action Proposed:[/bold yellow]\n[cyan]{cmd}[/cyan]", title="Permission Required"))
-            if AUTO_APPROVE and not watcher_passed:
-                console.print("[bold red]Watcher flagged this command! Manual override required.[/bold red]")
-            human_passed = prompt_user("Run this command? (y/n): ").lower() == 'y'
-    else:
-        human_passed = True
 
-    if human_passed != watcher_passed:
-        console.print(Panel(f"[bold red]CONFLICT DETECTED![/bold red]\nHuman Approved: {human_passed}\nWatcher Approved: {watcher_passed}\n[bold]Watcher Reasoning:[/bold]\n{watch_result}", title="Security Mismatch"))
-        if prompt_user("Are you absolutely sure you want to proceed with your choice? (y/n): ").lower() != 'y':
-            return "User aborted due to security watcher mismatch."
-        if not human_passed:
-            return "User definitively denied execution."
-    else:
-        if not human_passed:
-            return "User and Watcher agreed to deny execution."
+    async with ui_lock:
+        if not silent:
+            if AUTO_APPROVE and watcher_passed:
+                console.print(f"[bold green]⚡ Auto-approved:[/bold green] [cyan]{cmd}[/cyan]")
+                human_passed = True
+            else:
+                console.print(Panel(f"[cyan]{cmd}[/cyan]", title="Permission Required"))
+                if AUTO_APPROVE and not watcher_passed:
+                    console.print(f"[bold red]Watcher flagged this command! Reasoning:[/bold red]\n[dim]{watch_result}[/dim]")
+                ans = await async_prompt_user("Run this command? (y/n): ")
+                human_passed = ans.lower() == 'y'
+        else:
+            human_passed = True
+
+        if human_passed != watcher_passed:
+            if await async_prompt_user("Security mismatch. Proceed anyway? (y/n): ") != 'y':
+                return "User aborted due to security mismatch."
+
+    if not human_passed: return "User denied execution."
 
     try:
         if USE_SANDBOX:
-            safe_cmd = cmd.replace("'", "'\\''")
-            cmd = f"bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /root --tmpfs /tmp --unshare-all --die-with-parent -- sh -c '{safe_cmd}'"
-            console.print("[dim italic]📦 Executing inside Bubblewrap Sandbox...[/dim italic]")
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT).decode('utf-8', errors='replace')
-        return output[:MAX_RESULT_CHARS] + ("\n[TRUNCATED]" if len(output) > MAX_RESULT_CHARS else "")
-    except subprocess.CalledProcessError as e:
-        return f"Command failed with output: {e.output.decode('utf-8')}"
+            cmd = f"bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /root --tmpfs /tmp --unshare-all --die-with-parent -- sh -c '{cmd.replace(''''''', ''''\\''''')}'"
 
-def display_cmd(cmd):
-    console.print(Panel(f"[bold green]Displaying to User:[/bold green]\n[cyan]{cmd}[/cyan]", title="User Pager View"))
-    if prompt_user("View this output? (y/n): ").lower() == 'y':
-        try:
-            subprocess.run(f"{cmd} | less", shell=True)
-            return "SUCCESS: Output displayed to user."
-        except Exception as e: return f"Display failed: {e}"
-    return "User denied display."
+        process = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+        stdout, _ = await process.communicate()
+        output = stdout.decode('utf-8', errors='replace')
+        if len(output) > MAX_RESULT_CHARS:
+            console.print(f"[bold yellow]⚠️  Warning: Output truncated at {MAX_RESULT_CHARS} chars.[/bold yellow]")
+            if not sys.stdin.isatty():
+                return output[:MAX_RESULT_CHARS] + "\n[TRUNCATED]"
+            ans = await async_prompt_user("Continue with truncated output? (y/n): ")
+            if ans.lower() != 'y':
+                return output[:MAX_RESULT_CHARS] + "\n[TRUNCATED]"
+            return output[:MAX_RESULT_CHARS] + "\n[TRUNCATED]"
+        else:
+            return output
+    except Exception as e:
+        return f"Command failed: {str(e)}"
+
+# --- NATIVE TOOLS SCHEMA ---
+NATIVE_TOOLS = [
+    {"type": "function", "function": {"name": "run", "description": "Execute a Linux command.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+    {"type": "function", "function": {"name": "search", "description": "Search DuckDuckGo.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "read", "description": "Read webpage text.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {"name": "gc", "description": "Garbage collect old messages by ID.", "parameters": {"type": "object", "properties": {"ids": {"type": "array", "items": {"type": "string"}}}, "required": ["ids"]}}},
+    {"type": "function", "function": {"name": "set_state", "description": "Change compute state. Available states: 'triage' (Fast response mode), 'planning' (Deep reasoning mode), 'execution' (Tool execution mode), 'learning' (Failure analysis mode)", "parameters": {"type": "object", "properties": {"state": {"type": "string", "enum": ["triage", "planning", "execution", "learning"]}}, "required": ["state"]}}}
+]
+
+async def execute_tool_call(tc, internal_msgs):
+    global current_state
+    name = tc['function']['name']
+    try:
+        args = json.loads(tc['function']['arguments'])
+    except:
+        args = {}
+
+    res = ""
+    try:
+        if name == 'run':
+            res = await run_cmd(args.get('command', ''))
+        elif name == "search":
+            query = args.get('query', '')
+            console.print(f"[blue]🔍 Searching:[/blue] {query}")
+
+            # Rate limiter + retry logic
+            max_retries = _cfg.get('search_retry_count', 3)
+            base_delay = _cfg.get('search_retry_base_delay', 1.0)
+            timeout = _cfg.get('search_timeout', 30)
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    await search_rate_limiter.acquire()
+                    try:
+                        raw = await asyncio.to_thread(
+                            subprocess.check_output,
+                            ["ddgr", "--json", "-n", "3", query],
+                            stderr=subprocess.STDOUT,
+                            timeout=timeout
+                        )
+                        if raw.strip():
+                            res = str(json.loads(raw))
+                        else:
+                            res = "Error: Search returned no results."
+                        break
+                    except subprocess.TimeoutExpired:
+                        console.print(f"[yellow]Search timed out (attempt {attempt}/{max_retries})[/yellow]")
+                        continue
+                    except Exception as e:
+                        console.print(f"[yellow]Search error (attempt {attempt}/{max_retries}): {e}[/yellow]")
+                        if attempt < max_retries:
+                            wait = base_delay * (2 ** (attempt - 1))
+                            console.print(f"[dim]Retrying in {wait:.1f}s...[/dim]")
+                            await asyncio.sleep(wait)
+                        else:
+                            res = f"Error: Search failed after {max_retries} attempts: {e}"
+                finally:
+                    await search_rate_limiter.release()
+            else:
+                res = "Error: Search failed after maximum retries."
+        elif name == 'read':
+            console.print(f"[blue]📖 Reading:[/blue] {args.get('url')}")
+            raw = await asyncio.to_thread(
+                subprocess.check_output,
+                ["lynx", "-dump", "-nolist", "-display_charset=utf-8", args.get('url')],
+                stderr=subprocess.STDOUT
+            )
+            res = raw.decode('utf-8', errors='replace')
+            if len(res) > MAX_RESULT_CHARS:
+                console.print(f"[bold yellow]⚠️  Warning: Read output truncated at {MAX_RESULT_CHARS} chars.[/bold yellow]")
+                if not sys.stdin.isatty():
+                    res = res[:MAX_RESULT_CHARS] + "\n[TRUNCATED]"
+                else:
+                    ans = await async_prompt_user("Continue with truncated output? (y/n): ")
+                    if ans.lower() != 'y':
+                        res = res[:MAX_RESULT_CHARS] + "\n[TRUNCATED]"
+                    else:
+                        res = res[:MAX_RESULT_CHARS] + "\n[TRUNCATED]"
+            else:
+                res = res
+        elif name == 'set_state':
+            new_state = args.get('state')
+            if new_state in STATE_PROFILES:
+                current_state = new_state
+                res = f"SUCCESS: Compute state changed to {current_state}. Reason budget updated. ({STATE_PROFILES[current_state]['desc']})"
+                console.print(f"[dim purple]🧠 State Shift -> {current_state.upper()}[/dim purple]")
+            else:
+                res = f"Invalid state: {new_state}"
+        elif name == 'gc':
+            count = 0
+            for m in internal_msgs:
+                if m.get('id') in args.get('ids', []): m['gc'], count = True, count + 1
+            res = f"Garbage collected {count} messages."
+            console.print(f"[dim]🧹 GC applied to {count} blocks.[/dim]")
+        else:
+            res = f"Unknown tool {name}"
+
+    except subprocess.CalledProcessError as e:
+        # Feed CLI errors directly back to the AI
+        res = f"Tool Execution Failed (exit code {e.returncode}): {e.output.decode('utf-8', errors='replace') if e.output else 'Unknown error'}"
+    except json.JSONDecodeError:
+        res = "Tool Execution Failed: Search returned invalid JSON data. You might be rate-limited by DuckDuckGo."
+    except Exception as e:
+        res = f"Tool Execution Error: {str(e)}"
+
+    return {"role": "tool", "tool_call_id": tc['id'], "name": name, "content": res}
 
 def build_api_payload(internal_msgs):
-    api_msgs =[]
+    api_msgs = []
     for m in internal_msgs:
-        if m.get("gc", False):
-            continue
-
-        role = m["role"]
-        msg_id = m.get("id", "sys")
-        raw_content = m["content"]
-
-        prefix = f"[ID: {msg_id}]\n" if msg_id != "sys" and role != "system" else ""
-
-        if isinstance(raw_content, str):
-            content = prefix + raw_content
-        elif isinstance(raw_content, list):
-            content =[]
-            for idx, block in enumerate(raw_content):
-                if block["type"] == "text" and idx == 0:
-                    content.append({"type": "text", "text": prefix + block["text"]})
-                else:
-                    content.append(block)
-
-        api_msgs.append({"role": role, "content": content})
+        if m.get("gc", False): continue
+        msg = {"role": m["role"], "content": m.get("content", "")}
+        if "tool_calls" in m: msg["tool_calls"] = m["tool_calls"]
+        if "tool_call_id" in m:
+            msg["tool_call_id"] = m["tool_call_id"]
+            msg["name"] = m["name"]
+        api_msgs.append(msg)
     return api_msgs
 
-def main():
-    parser = argparse.ArgumentParser(description="Agentic NixOS Assistant")
+async def main():
+    parser = argparse.ArgumentParser()
     parser.add_argument("query", nargs="*", help="Your question")
-    parser.add_argument("-i", "--interactive", action="store_true", help="Enable tool usage")
-    parser.add_argument("-a", "--auto", action="store_true", help="Auto-approve commands if Watcher passes")
-    parser.add_argument("-s", "--sandbox", action="store_true", help="Wrap commands in a secure Bubblewrap sandbox")
-    parser.add_argument("-c", "--continue-session", dest="continue_session", metavar="SESSION_NAME", nargs="?", const="LIST", default=None, help="List sessions (no args), resume a session by name, or create a new named session. Falls back to LAST session if no name matched and no distinct query given.")
-    parser.add_argument("-r", "--routine", nargs="?", const="LIST", help="Load a routine playbook. Use without args to list.")
-    parser.add_argument("-img", "--image", action="append", help="Path to image to include")
+    parser.add_argument("-i", "--interactive", action="store_true")
+    parser.add_argument("-a", "--auto", action="store_true")
+    parser.add_argument("-s", "--sandbox", action="store_true")
+    parser.add_argument("-c", "--continue-session", dest="continue_session", nargs="?", const="LAST")
     args = parser.parse_args()
-    global AUTO_APPROVE
+
+    global AUTO_APPROVE, USE_SANDBOX, current_state
     AUTO_APPROVE = args.auto
-    global USE_SANDBOX
     USE_SANDBOX = args.sandbox
 
-    is_multimodal, model_name = detect_server_capabilities()
-
     user_query = " ".join(args.query).strip()
-    piped_data = ""
-    if not sys.stdin.isatty(): piped_data = sys.stdin.read().strip()
+    if not sys.stdin.isatty():
+        user_query += f"\n\n[PIPED DATA]:\n{sys.stdin.read().strip()}"
 
-    if piped_data:
-        user_query = f"{user_query}\n\n[PIPED DATA]:\n{piped_data}" if user_query else piped_data
-
-    if args.routine == "LIST":
-        routines = glob.glob(os.path.join(ROUTINE_DIR, "*.md"))
-        if routines:
-            console.print(Panel("\n".join([os.path.basename(r)[:-3] for r in routines]), title="Available Routines"))
-        else:
-            console.print("[red]No routines found.[/red]")
-        return
-
-    if args.continue_session == "LIST":
-        sessions = glob.glob(os.path.join(THREAD_DIR, "*.json"))
-        if sessions:
-            sessions.sort(key=os.path.getmtime, reverse=True)
-            lines = [os.path.basename(s)[:-5] for s in sessions[:20]]
-            console.print(Panel("\n".join(lines), title="Recent Sessions (use: ask -c <name>)"))
-        else:
-            console.print("[red]No sessions found.[/red]")
-        return
-
+    # --- RESTORED SESSION LOADING LOGIC ---
     latest_file = None
     files = glob.glob(os.path.join(THREAD_DIR, "*.json"))
-    
-    if args.continue_session and args.continue_session not in["LAST", "LIST"]:
+
+    if args.continue_session and args.continue_session not in ["LAST", "LIST"]:
+        # User specified a specific session name
         matched = glob.glob(os.path.join(THREAD_DIR, f"*{args.continue_session}*.json"))
         if matched:
             latest_file = max(matched, key=os.path.getmtime)
         else:
-            if user_query:
-                # User provided a distinct name AND a query. Treat as a new named session.
-                latest_file = os.path.join(THREAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.continue_session}.json")
-            else:
-                # User provided only one argument after -c, treat it as the query for the LAST session.
-                user_query = args.continue_session
-                args.continue_session = "LAST"
+            # Use the EXACT name provided by the user (no aggressive underscore replacement)
+            latest_file = os.path.join(THREAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.continue_session}.json")
 
-    if args.continue_session == "LAST" and not latest_file and files:
+    elif args.continue_session == "LAST" and files:
         latest_file = max(files, key=os.path.getmtime)
 
-    if not args.continue_session and not args.routine and files:
-        last_any = max(files, key=os.path.getmtime)
-        if (time.time() - os.path.getmtime(last_any)) < 600:
-            console.print("[dim italic]💡 Hint: Use '-c' to continue your recent conversation.[/dim italic]")
-
-    internal_msgs =[]
-    memory_active = False
-    
-    if args.continue_session and latest_file:
-        if os.path.exists(latest_file):
-            try:
-                with open(latest_file, 'r') as f:
-                    internal_msgs = json.load(f)
-                    memory_active = True
-            except: 
-                console.print(f"[red]Failed to load thread: {latest_file}[/red]")
-        # If it doesn't exist yet, memory_active remains False (correct for a new named session)
-    else:
-        safe_q = "".join([c if c.isalnum() else "_" for c in (user_query[:30] if isinstance(user_query, str) and user_query else "session")])
+    # Fallback: Brand new session (generate name from query)
+    if not latest_file:
+        safe_q = "".join([c if c.isalnum() else "_" for c in (user_query[:30] if user_query else "session")])
         if not safe_q: safe_q = "session"
         latest_file = os.path.join(THREAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_q}.json")
 
-    sys_prompt = get_identity_prompt(args.interactive, memory_active, is_multimodal)
+    internal_msgs = []
+    if os.path.exists(latest_file):
+        try:
+            with open(latest_file, 'r') as f: internal_msgs = json.load(f)
+        except: pass
+
+    sys_prompt = get_identity_prompt(args.interactive, len(internal_msgs)>0, False)
     if not internal_msgs:
         internal_msgs.append({"id": "sys", "role": "system", "content": sys_prompt, "gc": False})
-    else:
-        internal_msgs[0]["content"] = sys_prompt
 
-    if args.routine and args.routine != "LIST":
-        tpath = os.path.join(ROUTINE_DIR, f"{args.routine}.md")
-        if os.path.exists(tpath):
-            with open(tpath, 'r') as f:
-                internal_msgs.append({"id": gen_id("rtn"), "role": "user", "content": f"START ROUTINE PLAYBOOK:\n{f.read()}", "gc": False})
-        else:
-            console.print(f"[red]Routine '{args.routine}' not found.[/red]")
-            return
+    if user_query:
+        # If the user asks a completely new question, default to planning if it's long, else triage
+        current_state = "planning" if len(user_query) > 100 else "triage"
+        internal_msgs.append({"id": gen_id("usr"), "role": "user", "content": user_query, "gc": False})
 
-    if not user_query and not args.routine and not args.continue_session:
-        console.print(Panel("[bold cyan]Ask CLI[/bold cyan]\n'ask -r tutorial' to begin.", expand=False))
-        return
-
-    if user_query or args.image:
-        tool_status = "ENABLED (Use TOOL blocks)" if args.interactive else "DISABLED"
-        enhanced_query = f"[SYSTEM NOTE: Interactive tools are {tool_status}]\n\n{user_query}"
-
-        final_content = enhanced_query
-        if args.image:
-            final_content =[{"type": "text", "text": enhanced_query}]
-            for img_path in args.image:
-                if os.path.exists(img_path):
-                    mime_type, _ = mimetypes.guess_type(img_path)
-                    final_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type or 'image/jpeg'};base64,{encode_image(img_path)}"}
-                    })
-                else:
-                    console.print(f"[red]Image not found:[/red] {img_path}")
-
-        internal_msgs.append({"id": gen_id("usr"), "role": "user", "content": final_content, "gc": False})
-
-    # Save to disk immediately so other processes can see the user prompt
     sync_thread_file(latest_file, internal_msgs)
 
+    turn_count = 0
+    max_turns = _cfg.get("max_turns", 10)  # Prevent infinite agent loops
+
     while True:
-        # Check disk for injected messages before talking to API
-        sync_thread_file(latest_file, internal_msgs)
+        turn_count += 1
+        if turn_count > max_turns:
+            console.print(f"[bold yellow]⚠️  Warning: Maximum autonomous tool loops ({max_turns}) reached.[/bold yellow]")
+            if not sys.stdin.isatty():
+                internal_msgs.append({"id": gen_id("sys"), "role": "tool", "content": "System prevented further autonomous execution to avoid infinite loops.", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
+                break
+            ans = await async_prompt_user("Continue anyway? (y/n): ")
+            if ans.lower() != 'y':
+                internal_msgs.append({"id": gen_id("sys"), "role": "tool", "content": "System prevented further autonomous execution to avoid infinite loops.", "gc": False})
+                sync_thread_file(latest_file, internal_msgs)
+                break
+
         api_messages = build_api_payload(internal_msgs)
+        profile = STATE_PROFILES[current_state]
 
-        with Live(Spinner("dots", text="Thinking...", style="cyan"), transient=True):
+        payload = {
+            "messages": api_messages,
+            "temperature": profile["temperature"],
+            "max_tokens": profile["max_tokens"],
+            "reasoning_budget": profile["reasoning_budget"]
+        }
+        if args.interactive:
+            payload["tools"] = NATIVE_TOOLS
+            payload["tool_choice"] = "auto"
+
+        with Live(Spinner("dots", text=f"Thinking [{current_state.upper()}]...", style="cyan"), transient=True):
             try:
-                r = requests.post(API_URL, headers={"Authorization": f"Bearer {API_KEY}"}, json={"messages": api_messages}, timeout=TIMEOUT)
+                # Async API Call
+                r = await asyncio.to_thread(
+                    requests.post, API_URL,
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                    json=payload, timeout=TIMEOUT
+                )
                 r.raise_for_status()
-                data = r.json()
-                content = data['choices'][0]['message'].get('content') or data['choices'][0]['message'].get('reasoning_content', "")
+                response_msg = r.json()['choices'][0]['message']
             except Exception as e:
-                console.print(f"[red]API Error:[/red] {e}"); break
+                console.print(f"[red]API Error:[/red] {e}")
+                break
 
-        content = re.sub(r"^\s*\[ID:[^\]]+\]\s*", "", content)
-        ast_id = gen_id("ast")
-        internal_msgs.append({"id": ast_id, "role": "assistant", "content": content, "gc": False})
-        
-        # Save assistant text immediately
+        # Append Assistant response
+        ast_msg = {"id": gen_id("ast"), "role": "assistant", "content": response_msg.get('content') or "", "gc": False}
+        if "tool_calls" in response_msg:
+            ast_msg["tool_calls"] = response_msg["tool_calls"]
+            # After deciding on tools, switch state to execution for the next turn
+            current_state = "execution"
+
+        internal_msgs.append(ast_msg)
         sync_thread_file(latest_file, internal_msgs)
 
-        # --- ADVANCED TOOL PARSING (Bilingual) ---
-        tool = None
-
-        if "TOOL:" in content:
-            if not args.interactive:
-                internal_msgs.append({"id": gen_id("err"), "role": "user", "content": "Error: Tools are DISABLED.", "gc": False})
-                sync_thread_file(latest_file, internal_msgs)
-                continue
-            try:
-                line =[l for l in content.split('\n') if "TOOL:" in l][0]
-                tool = json.loads(line.split("TOOL:")[1].strip())
-            except Exception as e:
-                internal_msgs.append({"id": gen_id("err"), "role": "user", "content": f"Tool Parse Error: {e}", "gc": False})
-                sync_thread_file(latest_file, internal_msgs)
-                continue
-
-        elif "<|tool_call>" in content or "call:" in content:
-            if not args.interactive:
-                internal_msgs.append({"id": gen_id("err"), "role": "user", "content": "Error: Tools are DISABLED.", "gc": False})
-                sync_thread_file(latest_file, internal_msgs)
-                continue
-            try:
-                match = re.search(r"call:([a-zA-Z0-9_]+)\{([^}]*)\}", content)
-                if match:
-                    func_name = match.group(1)
-                    args_str = match.group(2).strip()
-
-                    args_str_fixed = re.sub(r'([a-zA-Z0-9_]+)\s*:', r'"\1":', args_str)
-
-                    tool_args = json.loads(f"{{{args_str_fixed}}}") if args_str_fixed else {}
-                    tool = {"name": func_name, **tool_args}
-            except Exception as e:
-                internal_msgs.append({"id": gen_id("err"), "role": "user", "content": f"Native Tool Parse Error: {e}", "gc": False})
-                sync_thread_file(latest_file, internal_msgs)
-                continue
-
-        # --- TOOL EXECUTION ---
-        if tool:
-            try:
-                res = ""
-                if tool['name'] == 'gc':
-                    ids_to_remove = tool.get('ids',[])
-                    removed_count = 0
-                    for m in internal_msgs:
-                        if m.get('id') in ids_to_remove and m.get('id') != "sys":
-                            m['gc'] = True
-                            removed_count += 1
-                    res = f"SUCCESS: Garbage collected {removed_count} messages."
-                    console.print(f"[dim]🧹 Garbage Collected {removed_count} blocks.[/dim]")
-
-                elif tool['name'] == 'run':
-                    res = run_cmd(tool.get('command', ''))
-                elif tool['name'] == 'display':
-                    res = display_cmd(tool.get('command', ''))
-                elif tool['name'] == 'search':
-                    query = tool.get('query', '')
-                    console.print(f"[blue]🔍 Searching:[/blue] {query}")
-                    res_raw = subprocess.check_output(["ddgr", "--json", "-n", "3", query], stderr=subprocess.DEVNULL)
-                    res = str(json.loads(res_raw))
-                elif tool['name'] == 'read':
-                    console.print(f"[blue]📖 Reading:[/blue] {tool['url']}")
-                    res = subprocess.check_output(["lynx", "-dump", "-nolist", "-display_charset=utf-8", "-assume_charset=utf-8", tool['url']], timeout=180).decode('utf-8', errors='replace')[:MAX_RESULT_CHARS]
-                else:
-                    res = f"Error: Unknown tool '{tool['name']}'"
-
-                internal_msgs.append({"id": gen_id("res"), "role": "user", "content": f"TOOL RESULT:\n{res}", "gc": False})
-                
-                # Save tool result immediately
-                sync_thread_file(latest_file, internal_msgs)
-                continue
-
-            except Exception as e:
-                internal_msgs.append({"id": gen_id("err"), "role": "user", "content": f"Tool Error: {e}", "gc": False})
-                sync_thread_file(latest_file, internal_msgs)
-                continue
-
-        # --- OUTPUT FORMATTING ---
-        clean_content = "\n".join([line for line in content.split("\n") if "TOOL:" not in line and "<|tool_call>" not in line])
-
-        try:
-            subprocess.run(['glow'], input=clean_content.encode())
-        except FileNotFoundError:
+        # Print reasoning/text if present
+        if ast_msg["content"]:
             from rich.markdown import Markdown
-            console.print(Markdown(clean_content))
+            console.print(Markdown(ast_msg["content"]))
 
-        break
+        # --- CONCURRENT NATIVE TOOL EXECUTION ---
+        if "tool_calls" in response_msg:
+            tasks = [execute_tool_call(tc, internal_msgs) for tc in response_msg["tool_calls"]]
+            results = await asyncio.gather(*tasks)
 
-if __name__ == "__main__": main()
+            for res_msg in results:
+                res_msg["id"] = gen_id("res")
+                res_msg["gc"] = False
+                internal_msgs.append(res_msg)
+
+            sync_thread_file(latest_file, internal_msgs)
+            continue # Loop back to LLM to evaluate tool results
+
+        break # No tools called, conversation turn is done
+
+if __name__ == "__main__":
+    try:
+        from rich.console import Console # Just in case it's not globally available at this scope
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        Console().print("\n[bold red]🛑 Operation aborted by user.[/bold red]")
+        sys.exit(0)

@@ -3,6 +3,13 @@
   "api_key": "KEY",
   "timeout": 1000,
   "max_result_chars": 131768,
+  "max_turns": 10,
   "auto_approve_default": false,
-  "use_sandbox_default": false
+  "use_sandbox_default": false,
+  "search_rate_limit": 5,
+  "search_rate_delay": 2.0,
+  "search_max_concurrent": 1,
+  "search_retry_count": 3,
+  "search_retry_base_delay": 1.0,
+  "search_timeout": 30
 }
