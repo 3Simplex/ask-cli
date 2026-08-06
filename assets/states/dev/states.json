@@ -18,7 +18,7 @@
     "description": "Take action to do work.",
     "context_commands": {
       "OS_guide": {
-      "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/docs/nix-guide.md",
+      "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/skills/nix-guide.md",
       "refresh": "first_turn"}
     },
     "reasoning_budget": 4096,
@@ -30,7 +30,7 @@
     "description": "Run tests, validate outputs, lint, and verify correctness.",
     "context_commands": {
       "OS_guide": {
-      "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/docs/nix-guide.md",
+      "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/skills/nix-guide.md",
       "refresh": "first_turn"}
     },
     "reasoning_budget": 4096,

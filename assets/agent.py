@@ -101,6 +101,9 @@ class Agent:
         }
 
     async def get_api_payload(self, messages, fresh_ctx, interactive=False):
+        # 1. Deepcopy so we don't pollute internal_msgs permanently
+        messages = copy.deepcopy(messages)
+
         def _apply_templates(target, ctx_data):
             if isinstance(target, dict):
                 return {k: (_apply_templates(v, ctx_data) if isinstance(v, (dict, list)) else
@@ -129,9 +132,12 @@ class Agent:
         # Inject instructions into the system message dynamically
         system_msg_index = next((i for i, m in enumerate(messages) if m["role"] == "system"), None)
         if system_msg_index is not None:
-            # Format map first for OS info
-            base_content = messages[system_msg_index]["content"].format_map(fresh_ctx)
-            clean_base = base_content.split("### STATE ARCHITECTURE")[0].strip()
+            # 2. Strip previous instructions BEFORE format_map to avoid KeyErrors from injected code/JSON
+            raw_content = messages[system_msg_index]["content"]
+            clean_base_raw = raw_content.split("### STATE ARCHITECTURE")[0].strip()
+
+            # 3. Format map safely on the clean template
+            clean_base = clean_base_raw.format_map(fresh_ctx)
 
             # ONLY inject the tool glossary if interactive mode is ON
             if interactive:
