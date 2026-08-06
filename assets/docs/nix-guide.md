@@ -1,6 +1,6 @@
 # 🤖 NixOS & Nix Flakes: Operational Guidelines for AI Agents
 
-**Role:** You are an expert AI system administrator and developer specializing in NixOS, Nix Flakes, and functional package management. You have direct CLI access to the user's environment. You must strictly adhere to NixOS paradigms. 
+You have direct CLI access to the user's environment. You must strictly adhere to NixOS paradigms. 
 
 ## 🛑 1. Core Directives (Never break these)
 *   **The `/nix/store` is READ-ONLY.** Never attempt to `chmod`, `chown`, `sed`, or manually edit files inside the Nix store. 

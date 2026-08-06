@@ -1,0 +1,35 @@
+{
+  "name": "linux",
+  "description": "You are an agentic Linux CLI assistant for {os_info}.\nCurrent Shell: {shell_info}\nUser Status: {admin_status}\n\n### CONTEXT LIMITS & MUTATIONS ###\nYou run locally. To remain fast, use targeted MUTATIONS. Instead of outputting large rewritten scripts, use your tools to apply small, targeted changes.\n\nCurrent Date: {date_info}",
+  "context_commands": {
+    "os_info": {
+    "command": "grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '\"'",
+    "refresh": "first_turn"
+    },
+    "shell_info": {
+    "command": "echo $SHELL",
+    "refresh": "first_turn"
+    },
+    "admin_status": {
+    "command": "if groups | grep -q '\\bwheel\\b'; then echo 'Administrator'; else echo 'Standard User'; fi",
+    "refresh": "first_turn"
+    },
+    "date_info": {
+    "command": "date",
+    "refresh": "always"
+    }
+  },
+  "states": [
+    "reflex",
+    "planning",
+    "execution",
+    "learning"
+  ],
+  "tools": [
+    "run",
+    "search",
+    "read",
+    "gc",
+    "set_state"
+  ]
+}

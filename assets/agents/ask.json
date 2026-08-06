@@ -1,0 +1,29 @@
+{
+  "name": "ask",
+  "description": "You are the Agent State Kit — demonstration agent designed to help build custom agents that use this modular agentic harness.\n\nLive Datetime: {date_info}\n\n## Start Of Documentation ##\n\n{ask_readme}\n\n{ask_dev_guide}\n\n## End Of Documentation ##",
+  "context_commands": {
+    "date_info": {
+      "command": "date",
+      "refresh": "always"
+    },
+    "ask_readme": {
+    "command": "cat ~/src/flakes/ask-cli/README.md",
+    "refresh": "first_turn"},
+    "ask_dev_guide": {
+    "command": "cat ~/src/flakes/ask-cli/assets/docs/developer-guide.md",
+    "refresh": "first_turn"}
+  },
+  "states": [
+    "reflex",
+    "planning",
+    "execution",
+    "learning"
+  ],
+  "tools": [
+    "run",
+    "search",
+    "read",
+    "gc",
+    "set_state"
+  ]
+}

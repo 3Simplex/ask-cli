@@ -1,0 +1,49 @@
+import json
+import subprocess
+import asyncio
+from assets.registry import ask_tool
+from rich.console import Console
+
+console = Console()
+
+@ask_tool(
+    name="search",
+    description="Search DuckDuckGo.",
+    schema_properties={"query": {"type": "string"}}
+)
+async def search_handler(ctx, agent, args, internal_msgs=None):
+    query = args.get('query', '')
+    console.print(f"[blue]Searching:[/blue] {query}")
+
+    max_retries = ctx.config.get('search_retry_count', 3)
+    base_delay = ctx.config.get('search_retry_base_delay', 1.0)
+    timeout = ctx.config.get('search_timeout', 30)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Use the rate limiter from context!
+            await ctx.search_limiter.acquire()
+            try:
+                raw = await asyncio.to_thread(
+                    subprocess.check_output,
+                    ["ddgr", "--json", "-n", "3", query],
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout
+                )
+                if raw.strip():
+                    return str(json.loads(raw))
+                return "Error: Search returned no results."
+            except subprocess.TimeoutExpired:
+                console.print(f"[yellow]Search timed out (attempt {attempt}/{max_retries})[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]Search error (attempt {attempt}/{max_retries}): {e}[/yellow]")
+                if attempt < max_retries:
+                    wait = base_delay * (2 ** (attempt - 1))
+                    console.print(f"[dim]Retrying in {wait:.1f}s...[/dim]")
+                    await asyncio.sleep(wait)
+                else:
+                    return f"Error: Search failed after {max_retries} attempts: {e}"
+        finally:
+            await ctx.search_limiter.release()
+
+    return "Error: Search failed after maximum retries."
