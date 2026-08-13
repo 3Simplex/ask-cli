@@ -1,30 +1,37 @@
 {
-  "reflex": {
-    "system_prompt": "You are in reflex mode. Respond instantly to clear, straightforward inputs. No reasoning or tool use is required. Provide a concise, direct answer.",
-    "description": "Handle unambiguous inputs with instant, zero-reasoning responses. Skip analysis and output the direct answer immediately.",
+  "idle": {
+    "description": "Use when no other state is needed.",
+    "system_prompt": "Communicate with the user.",
+    "allowed_tools": ["set_state"],
     "temperature": 0.1,
-    "reasoning_budget": 0,
-    "allowed_tools": ["read", "search", "set_state"]
+    "reasoning_budget": 4096
   },
   "planning": {
-    "system_prompt": "You are in planning mode. Use deep reasoning to outline a step-by-step strategy. Before suggesting any actions make certain there is no ambiguity in any task, ensure that you have consensus from all parties. Always consider edge cases, potential errors etc...",
-    "description": "Use planning mode to create or modify your plans.",
+    "description": "Use planning to acomplish goals.",
+    "system_prompt": "Use deep reasoning to create or refine a step-by-step plan of actions.",
+    "allowed_tools": ["read", "search", "set_state"],
     "temperature": 0.6,
-    "reasoning_budget": 8192,
-    "allowed_tools": ["read", "search", "set_state"]
+    "reasoning_budget": 8192
   },
-  "execution": {
-    "system_prompt": "You are in execution mode. Focus on the immediate next step. Carefully interpret tool outputs and decide if the next action is a direct follow-up or a new direction.",
-    "description": "Use execution mode for enacting your plan.",
+  "action": {
+    "description": "Use action to follow the plan.",
+    "system_prompt": "Take steps to follow the plan, change to review after a step is complete or if you have trouble.",
+    "allowed_tools": ["run", "search", "read", "set_state"],
     "temperature": 0.1,
-    "reasoning_budget": 4096,
-    "allowed_tools": ["run", "search", "read", "gc", "set_state"]
+    "reasoning_budget": 4096
   },
-  "learning": {
-    "system_prompt": "You are in learning mode. Analyze the previous failure or unexpected result. Determine why the previous action failed and formulate a corrective strategy.",
-    "description": "Use learning mode when your previous action did not go as expected.",
+  "review": {
+    "description": "Use review after an action or planning.",
+    "system_prompt": "Analyze the outcome. Decide what to do next.",
+    "allowed_tools": ["read", "search", "set_state"],
     "temperature": 0.1,
-    "reasoning_budget": 4096,
-    "allowed_tools": ["read", "search", "set_state"]
+    "reasoning_budget": 4096
+  },
+  "prune": {
+    "description": "Use prune to prevent oom by cleaning the history.",
+    "system_prompt": "Only use tools while in this state. Either use the 'gc' tool on stale and irrelevant messages or get out using 'set_state'.",
+    "allowed_tools": ["gc", "set_state"],
+    "temperature": 0.1,
+    "reasoning_budget": 4096
   }
 }

@@ -16,10 +16,11 @@
     }
   },
   "states": [
-    "reflex",
+    "idle",
     "planning",
-    "execution",
-    "learning"
+    "action",
+    "review",
+    "prune"
   ],
   "tools": [
     "run",

@@ -4,8 +4,8 @@
 
 The Agent State Kit is a framework for building custom AI agents. Each agent is defined by three components:
 
-1. **Profile** (`agents/<name>.json`) — name, description, context commands, states, tools
-2. **States** (`states/<name>/states.json`) — state definitions with system prompts, allowed tools, temperature, reasoning budget
+1. **Profile** (`agents/<name>.json`) — name, description, context_providers, states, tools
+2. **States** (`states/<name>/states.json`) — state definitions with system prompts, description, allowed tools, temperature, reasoning budget, context_providers
 3. **Tools** (`tools/*.py`) — tool implementations registered via the `@ask_tool` decorator
 
 ## Building a Custom Agent
@@ -16,16 +16,16 @@ Create `assets/agents/your-agent.json`:
 
 ```json
 {
-  "name": "your-agent",
-  "description": "What this agent does...",
+  "name": "my-agent",
+  "description": "You are... {my_var}",
   "context_providers": {
     "my_var": {
-      "command": "echo hello",
+      "command": "echo my_var is the output of this command.",
       "refresh": "always"
     }
   },
-  "states": ["reflex", "planning", "execution", "learning"],
-  "tools": ["run", "read", "search", "gc", "set_state"]
+  "states": ["template_state", "planning", "action", "review"],
+  "tools": ["your-tool", "run", "read", "search", "gc", "set_state"]
 }
 ```
 
@@ -35,54 +35,75 @@ Create `assets/states/your-agent/states.json`:
 
 ```json
 {
-  "reflex": {
-    "system_prompt": "Your system prompt here",
-    "allowed_tools": ["read", "search", "set_state"],
+  "template_state": {
+    "description": "Explain when and why to use this state.",
+    "system_prompt": "Your system prompt here, may include context_providers for {this_state}.",
+  "context_providers": {
+    "this_state": {
+      "command": "echo when state specific information is required.",
+      "refresh": "template_state"
+    }
+  },
+    "allowed_tools": ["your-tool", "set_state"],
     "temperature": 0.1,
     "reasoning_budget": 0
   },
   "planning": {
-    "system_prompt": "Use deep reasoning to outline a step-by-step strategy.",
+    "description": "Use planning to acomplish goals.",
+    "system_prompt": "Use deep reasoning to create or refine a step-by-step plan of actions.",
     "allowed_tools": ["read", "search", "set_state"],
     "temperature": 0.6,
     "reasoning_budget": 8192
   },
-  "execution": {
-    "system_prompt": "Focus on the immediate next step.",
-    "allowed_tools": ["run", "search", "read", "gc", "set_state"],
+  "action": {
+    "description": "Use action to follow the plan.",
+    "system_prompt": "Take steps to follow the plan, change to review after a step is complete or if you have trouble.",
+    "allowed_tools": ["run", "search", "read", "set_state"],
     "temperature": 0.1,
     "reasoning_budget": 4096
   },
-  "learning": {
-    "system_prompt": "Analyze the previous failure or unexpected result.",
+  "review": {
+    "description": "Use review after an action or planning.",
+    "system_prompt": "Analyze the outcome. Decide what to do next.",
     "allowed_tools": ["read", "search", "set_state"],
+    "temperature": 0.1,
+    "reasoning_budget": 4096
+  },
+  "prune": {
+    "description": "Use prune to prevent oom by cleaning the history.",
+    "system_prompt": "Only use tools while in this state. Either use the 'gc' tool on stale and irrelevant messages or get out using 'set_state'.",
+    "allowed_tools": ["gc", "set_state"],
     "temperature": 0.1,
     "reasoning_budget": 4096
   }
 }
 ```
 
-### 3. Run It
+## Context Providers
 
-```bash
-ask --agent your-agent "hello"
-```
-
-## Context Commands
-
-Context commands are resolved at runtime and can be referenced in agent descriptions using `{command_name}` template syntax.
+Context providers are resolved at runtime and can be referenced in agent descriptions using `{name}` template syntax. For use with states.json and agent.json files.
 
 ```json
 {
-  "command": "echo hello",
-  "refresh": "always" | "first_turn" | "state_change" | ["state1", "state2"]
+  "context_providers": {
+      "dir": {            # name
+      "command": "pwd",   # command or api
+      "refresh": "always" # resolve
+    }
+  }
 }
 ```
 
 - `always`: Run every turn
 - `first_turn`: Run only on the first turn
 - `state_change`: Run when the state changes
-- `["state1", "state2"]`: Run only in these states
+- `["state1", "state2"]`: Run only in specific states (best used in the agent.json file)
+
+### 3. Run It
+
+```bash
+ask --agent your-agent "hello"
+```
 
 ## Adding Custom Tools
 
@@ -112,16 +133,11 @@ import assets.tools.your-tool
 
 States control what tools are available and how the agent behaves:
 
-| State | Purpose |
-|-------|---------|
-| `reflex` | Instant responses, no reasoning |
-| `planning` | Deep reasoning, strategy creation |
-| `execution` | Tool execution, action |
-| `learning` | Failure analysis, correction |
-
 Each state has:
-- `system_prompt`: Instructions for the agent in this state
-- `allowed_tools`: Which tools are available
+- `system_prompt`: Instructions for the agent while in this state
+- `description`: A description presented in the set_state tool list (explain its purpose and transition requirements)
+- `context_providers`: Optionally collect/provide special context while in this state
+- `allowed_tools`: Which tools are available in this state
 - `temperature`: LLM temperature (lower = more deterministic)
 - `reasoning_budget`: Max tokens for reasoning
 
