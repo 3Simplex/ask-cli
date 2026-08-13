@@ -65,6 +65,11 @@ async def main():
     parser.add_argument("--oobe", action="store_true", help="Run first-run setup wizard (even if config exists)")
     args = parser.parse_args()
 
+    # ── Guard: no query + piped input → show help and exit ──
+    if not args.query and sys.stdin.isatty():
+        parser.print_help()
+        sys.exit(0)
+
     # ── Auto-run OOBE on first launch (BEFORE any context creation) ──
     # Change config_path to point to the user's writable home directory
     config_path = Path.home() / ".local" / "share" / "ask" / "config.json"
