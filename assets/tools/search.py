@@ -31,7 +31,17 @@ async def search_handler(ctx, agent, args, internal_msgs=None):
                     timeout=timeout
                 )
                 if raw.strip():
-                    return str(json.loads(raw))
+                    result_str = str(json.loads(raw))
+
+                    # Prevent massive JSON from blowing the context
+                    budget = ctx.get_token_budget()
+                    max_chars = max(500, int(budget * 3.5))
+
+                    if len(result_str) > max_chars:
+                        console.print(f"[bold yellow]Warning: Search output truncated to fit context budget.[/bold yellow]")
+                        return result_str[:max_chars] + "\n[TRUNCATED: LOW CONTEXT BUDGET]"
+
+                    return result_str
                 return "Error: Search returned no results."
             except subprocess.TimeoutExpired:
                 console.print(f"[yellow]Search timed out (attempt {attempt}/{max_retries})[/yellow]")

@@ -114,6 +114,64 @@ class AskContext:
             max_concurrent=self.config.get('search_max_concurrent', 1),
         )
 
+        self.current_tokens = 0
+        self.max_tokens = 8192  # Default fallback
+
+    def get_token_budget(self, max_tokens: int = None) -> int:
+        """Calculate roughly how many tokens are remaining in the context window.
+        Leaves a 1000 token buffer for system prompts and the model's reply."""
+        # Use provided max_tokens or fall back to the native tracker
+        mt = max_tokens if max_tokens else self.max_tokens
+        buffer = 1000
+        budget = mt - self.current_tokens - buffer
+        return max(0, budget)
+
+    async def init_context_limit(self):
+        """Fetch the true context limit for the active session model."""
+        model = self.config.get("model")
+        if not model:
+            return
+
+        api_base = self.config.get("api_base", "").removesuffix("/v1")
+        import urllib.parse
+        encoded_model = urllib.parse.quote(model)
+
+        try:
+            # Route exactly to the model we are about to use
+            r = await asyncio.to_thread(requests.get, f"{api_base}/props?model={encoded_model}", timeout=2)
+            if r.status_code == 200:
+                data = r.json()
+                n_ctx = data.get("default_generation_settings", {}).get("n_ctx", 0)
+                if n_ctx > 0:
+                    self.max_tokens = n_ctx
+        except Exception:
+            pass
+
+    async def measure_tokens(self, messages: list) -> int:
+        """Use the server's tokenizer to proactively count tokens in a message array."""
+        if not self.config.get("api_base") or not self.config.get("model"):
+            return self.current_tokens
+
+        api_base = self.config["api_base"].removesuffix("/v1")
+        payload = {
+            "model": self.config["model"],
+            "messages": messages
+        }
+
+        try:
+            r = await asyncio.to_thread(
+                requests.post,
+                f"{api_base}/v1/chat/completions/input_tokens",
+                headers={"Authorization": f"Bearer {self.config.get('api_key', '')}"},
+                json=payload,
+                timeout=5
+            )
+            if r.status_code == 200:
+                self.current_tokens = r.json().get("input_tokens", self.current_tokens)
+        except Exception:
+            pass
+        return self.current_tokens
+
     def _resolve_assets_dir(self) -> Path:
         if path := os.environ.get('ASK_ASSETS_DIR'):
             return Path(path)

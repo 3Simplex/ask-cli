@@ -18,7 +18,7 @@ Create `assets/agents/your-agent.json`:
 {
   "name": "your-agent",
   "description": "What this agent does...",
-  "context_commands": {
+  "context_providers": {
     "my_var": {
       "command": "echo hello",
       "refresh": "always"

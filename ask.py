@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import os, sys, json, argparse, glob, asyncio, requests, subprocess
+import os, sys, json, argparse, glob, asyncio, requests, subprocess, pkgutil, importlib, uuid
+
 from pathlib import Path
 from datetime import datetime
-import uuid
 
 from rich.console import Console
 from rich.live import Live
@@ -14,12 +14,32 @@ from assets.context import AskContext
 from assets.agent import Agent
 from assets.registry import TOOL_REGISTRY
 
-# Import tools to trigger their @ask_tool decorators
-import assets.tools.gc
-import assets.tools.search
-import assets.tools.run
-import assets.tools.read
-import assets.tools.set_state
+def _load_tool_modules():
+    """Auto-discover and import all tool modules from assets/tools/"""
+    # 1. Respect the Nix wrapper's environment variable first
+    if path := os.environ.get('ASK_ASSETS_DIR'):
+        tools_dir = Path(path) / "tools"
+    else:
+        # 2. Local development fallback
+        tools_dir = Path(__file__).parent / "assets" / "tools"
+        if not tools_dir.is_dir():
+            # 3. Standard Nix store fallback if env var is missing
+            tools_dir = Path(__file__).parent.parent / "share" / "ask" / "assets" / "tools"
+
+    if not tools_dir.is_dir():
+        console = Console()
+        console.print("[dim]⚠ Tools directory not found. Auto-discovery skipped.[/dim]")
+        return
+
+    for _, module_name, _ in pkgutil.iter_modules([str(tools_dir)]):
+        module_full = f"assets.tools.{module_name}"
+        try:
+            importlib.import_module(module_full)
+        except Exception as e:
+            console = Console()
+            console.print(f"[dim]⚠ Failed to load tool {module_name}: {e}[/dim]")
+
+_load_tool_modules()
 
 console = Console()
 
@@ -99,6 +119,8 @@ async def main():
                     # Load the saved model for this session
                     if "model" in loaded:
                         ctx.config["model"] = loaded["model"]
+                    if "tokens" in loaded:
+                        ctx.current_tokens = loaded["tokens"]
                     internal_msgs = loaded.get("messages", [])
         except: pass
 
@@ -113,9 +135,12 @@ async def main():
     # Trigger model selection if one isn't set yet
     await ctx.select_model_if_needed()
 
+    # Now that we have a guaranteed model, fetch its true context size
+    await ctx.init_context_limit()
+
     with open(latest_file, 'w') as f:
         # Save the model to the thread state
-        json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "messages": internal_msgs}, f)
+        json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs}, f)
 
     turn_count = 0
 
@@ -130,6 +155,10 @@ async def main():
                 turn_count = 0  # Reset counter
             else:
                 break
+
+        # Proactively measure tokens before building the system prompt
+        if ctx.config.get("model"):
+            await ctx.measure_tokens(internal_msgs)
 
         fresh_ctx = await agent._resolve_context()
 
@@ -149,7 +178,13 @@ async def main():
                     json=payload, timeout=ctx.config['timeout']
                 )
                 r.raise_for_status()
-                response_msg = r.json()['choices'][0]['message']
+                response_data = r.json()
+                response_msg = response_data['choices'][0]['message']
+
+                # Context limit tracking
+                if "usage" in response_data:
+                    ctx.current_tokens = response_data["usage"].get("total_tokens", ctx.current_tokens)
+
             except requests.exceptions.RequestException as e:
                 err_msg = str(e)
                 if hasattr(e, 'response') and e.response is not None:
@@ -198,14 +233,14 @@ async def main():
 
             # Persist state alongside messages
             with open(latest_file, 'w') as f:
-                json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "messages": internal_msgs}, f)
+                json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs}, f)
 
             console.print("[bold green]✅ Tools completed.[/bold green]\n")
             continue
 
         # 4. IF NO TOOLS, SAVE FINAL STATE AND BREAK
         with open(latest_file, 'w') as f:
-            json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "messages": internal_msgs}, f)
+            json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs}, f)
         break
 
 if __name__ == "__main__":

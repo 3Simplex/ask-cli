@@ -50,7 +50,8 @@ async def run_handler(ctx, agent, args, internal_msgs=None):
 
     try:
         if ctx.config.get('use_sandbox_default', False):
-            cmd = f"bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /root --tmpfs /tmp --unshare-all --die-with-parent -- sh -c '{cmd.replace(chr(39), chr(92)+chr(39))}'"
+            cmd_escaped = cmd.replace("'", "'\\''")
+            cmd = f"bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /root --tmpfs /tmp --unshare-all --die-with-parent -- sh -c '{cmd_escaped}'"
 
         process = await asyncio.create_subprocess_shell(
             cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
@@ -58,13 +59,16 @@ async def run_handler(ctx, agent, args, internal_msgs=None):
         stdout, _ = await process.communicate()
         output = stdout.decode('utf-8', errors='replace')
 
-        max_chars = ctx.config.get('max_result_chars', 4000)
+        # Dynamically calculate truncation based on remaining context
+        budget = ctx.get_token_budget()
+        max_chars = max(500, int(budget * 3.5))  # Min 500 chars, else heuristic
+
         if len(output) > max_chars:
-            console.print(f"[bold yellow]Warning: Output truncated at {max_chars} chars.[/bold yellow]")
+            console.print(f"[bold yellow]Warning: Output truncated to {max_chars} chars to fit context budget.[/bold yellow]")
             ans = await ctx.async_prompt_user("Continue with truncated output? (y/n): ")
             if ans.lower() != 'y':
                 return "User aborted due to truncation."
-            return output[:max_chars] + "\n[TRUNCATED]"
+            return output[:max_chars] + "\n[TRUNCATED: LOW CONTEXT BUDGET]"
         return output
     except Exception as e:
         return f"Command failed: {str(e)}"

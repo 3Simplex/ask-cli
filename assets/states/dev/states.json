@@ -16,7 +16,7 @@
   "work": {
     "allowed_tools": ["run", "read", "set_state"],
     "description": "Take action to do work.",
-    "context_commands": {
+    "context_providers": {
       "OS_guide": {
       "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/skills/nix-guide.md",
       "refresh": "first_turn"}
@@ -28,7 +28,7 @@
   "test": {
     "allowed_tools": ["run", "read", "set_state"],
     "description": "Run tests, validate outputs, lint, and verify correctness.",
-    "context_commands": {
+    "context_providers": {
       "OS_guide": {
       "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/skills/nix-guide.md",
       "refresh": "first_turn"}

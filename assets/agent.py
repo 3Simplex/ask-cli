@@ -8,22 +8,67 @@ from .registry import TOOL_REGISTRY
 
 class Agent:
     async def _resolve_cmd(self, cmd: str) -> str:
+        if not cmd: return ""
         try:
-            result = subprocess.check_output(
+            result = await asyncio.to_thread(
+                subprocess.check_output,
                 cmd, shell=True, stderr=subprocess.DEVNULL, text=True, timeout=10
             )
             return result.strip()
         except Exception as e:
             return f"[cmd_error] {e}"
 
+    async def _resolve_api(self, cfg: dict) -> str:
+        import requests
+        url = cfg.get("url", cfg.get("endpoint", ""))
+        if not url: return ""
+
+        # If it's a relative path, assume it's for the local LLM server
+        if url.startswith("/"):
+            # Strip /v1 if present so we can hit root endpoints like /props
+            base_url = self.ctx.config.get("api_base", "").removesuffix("/v1")
+            url = base_url + url
+
+        method = cfg.get("method", "GET").upper()
+        headers = cfg.get("headers", {})
+        payload = cfg.get("payload")
+        extract = cfg.get("extract", "")
+
+        try:
+            r = await asyncio.to_thread(
+                requests.request, method, url, headers=headers, json=payload, timeout=5
+            )
+            r.raise_for_status()
+            data = r.json()
+
+            # Simple JSON path extractor (e.g., "data[0].id" or "default_generation_settings.n_ctx")
+            if extract:
+                parts = extract.replace('[', '.').replace(']', '').split('.')
+                for part in parts:
+                    if not part: continue
+                    if isinstance(data, dict):
+                        data = data.get(part)
+                    elif isinstance(data, list):
+                        try: data = data[int(part)]
+                        except (ValueError, IndexError): return ""
+                    else:
+                        return ""
+
+            return str(data) if data is not None else ""
+        except Exception as e:
+            return f"[api_error] {e}"
+
     async def _resolve_context(self) -> dict:
         self._turn_count += 1
         now = time.time()
         resolved = {}
-        all_commands = {**self._raw_commands, **self._state_commands.get(self.state_name, {})}
+
+        # Merge both old 'context_commands' and new 'context_providers'
+        all_providers = {**self._raw_commands, **self._state_commands.get(self.state_name, {})}
 
         async def resolve_one(key, cfg):
-            cmd = cfg.get("command", "")
+            # Default to 'shell' if not specified for backward compatibility
+            ptype = cfg.get("type", "shell")
             policy = cfg.get("refresh", "first_turn")
             ttl = cfg.get("cache_ttl", 0)
 
@@ -44,14 +89,27 @@ class Agent:
 
             # 3. Execute & cache
             if should_run:
-                val = await self._resolve_cmd(cmd)
+                if ptype == "shell":
+                    val = await self._resolve_cmd(cfg.get("command", ""))
+                elif ptype == "api":
+                    val = await self._resolve_api(cfg)
+                else:
+                    val = f"[error] unknown provider type: {ptype}"
+
                 self._context_cache[key] = {"result": val, "expires": now}
                 return key, val
             return key, self._context_cache.get(key, {}).get("result", "")
 
-        tasks = [resolve_one(k, v) for k, v in all_commands.items()]
+        tasks = [resolve_one(k, v) for k, v in all_providers.items()]
         results = await asyncio.gather(*tasks)
-        return {k: v for k, v in results}
+
+        # Build the final dict and inject in-memory runtime variables
+        final_context = {k: v for k, v in results}
+        final_context["current_tokens"] = str(getattr(self.ctx, "current_tokens", 0))
+        final_context["max_context"] = str(getattr(self.ctx, "max_tokens", 8192))
+        final_context["current_model"] = str(self.ctx.config.get("model", "unknown"))
+
+        return final_context
 
     def _inject_ids_inline(self, messages):
         """Prepend message IDs inline to each message's content when gc is available.
@@ -94,9 +152,9 @@ class Agent:
         if self.ctx.active_routine:
             self.context["active_routine"] = self.ctx.active_routine
 
-        self._raw_commands = self.profile.get("context_commands", {})
+        self._raw_commands = self.profile.get("context_providers", self.profile.get("context_commands", {}))
         self._state_commands = {
-            name: cfg.get("context_commands", {})
+            name: cfg.get("context_providers", cfg.get("context_commands", {}))
             for name, cfg in self.states.items()
         }
 

@@ -1,7 +1,7 @@
 {
   "name": "ask",
-  "description": "You are the Agent State Kit — demonstration agent designed to help build custom agents that use this modular agentic harness.\n\nLive Datetime: {date_info} incorporate a time-of-day greeting and consider the time when your working.\n\n## Start Of Documentation ##\n\n{ask_readme}\n\n{ask_dev_guide}\n\n## End Of Documentation ##",
-  "context_commands": {
+  "description": "You are the Agent State Kit — demonstration agent designed to help build custom agents that use this modular agentic harness.\n\nLive Datetime: {date_info} incorporate a time-of-day greeting and consider the time when your working.\n\n- Context Usage: {current_tokens} / {max_context} tokens.\n- Current Model: {current_model}\n## Start Of Documentation ##\n\n{ask_readme}\n\n{ask_dev_guide}\n\n## End Of Documentation ##",
+  "context_providers": {
     "date_info": {
     "command": "date",
     "refresh": "always"

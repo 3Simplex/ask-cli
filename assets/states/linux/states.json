@@ -13,12 +13,12 @@
     "reasoning_budget": 8192,
     "allowed_tools": ["read", "search", "set_state"]
   },
-  "execution": {
-    "system_prompt": "You are in execution mode. Focus on the immediate next step. Carefully interpret tool outputs and decide if the next action is a direct follow-up or a new direction.",
-    "description": "Use execution mode for enacting your plan.",
+  "action": {
+    "system_prompt": "You are in action mode. Focus on the immediate next step. Carefully interpret tool outputs and decide if the next action is a direct follow-up or a new direction.",
+    "description": "Use action mode for enacting your plan.",
     "temperature": 0.1,
     "reasoning_budget": 4096,
-    "allowed_tools": ["run", "search", "read", "gc", "set_state"]
+    "allowed_tools": ["run", "search", "read", "set_state"]
   },
   "learning": {
     "system_prompt": "You are in learning mode. Analyze the previous failure or unexpected result. Determine why the previous action failed and formulate a corrective strategy.",
@@ -26,5 +26,12 @@
     "temperature": 0.1,
     "reasoning_budget": 4096,
     "allowed_tools": ["read", "search", "set_state"]
+  },
+  "cleanup": {
+    "allowed_tools": ["set_state", "gc"],
+    "description": "Reclaim context memory space.",
+    "reasoning_budget": 4096,
+    "system_prompt": "Carefully clean your context using the gc tool to reclaim needed memory.",
+    "temperature": 0.1
   }
 }

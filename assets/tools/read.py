@@ -39,13 +39,15 @@ async def read_handler(ctx, agent, args, internal_msgs=None):
     except Exception as e:
         return f"Error reading target: {str(e)}"
 
-    # Check for truncation and interactive warning
-    max_chars = ctx.config.get('max_result_chars', 4000)
+    # Dynamically calculate truncation based on remaining context
+    budget = ctx.get_token_budget()
+    max_chars = max(500, int(budget * 3.5))
+
     if len(content) > max_chars:
-        console.print(f"[bold yellow]Warning: Read output truncated at {max_chars} chars.[/bold yellow]")
+        console.print(f"[bold yellow]Warning: Read output truncated to {max_chars} chars to fit context budget.[/bold yellow]")
         ans = await ctx.async_prompt_user("Continue with truncated output? (y/n): ")
         if ans.lower() != 'y':
             return "User aborted due to truncation."
-        return content[:max_chars] + "\n[TRUNCATED]"
+        return content[:max_chars] + "\n[TRUNCATED: LOW CONTEXT BUDGET]"
 
     return content
