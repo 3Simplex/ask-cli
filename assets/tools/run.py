@@ -5,7 +5,7 @@ import sys
 from rich.panel import Panel
 from rich.console import Console
 
-from assets.registry import ask_tool
+from assets.core.registry import ask_tool
 
 console = Console()
 

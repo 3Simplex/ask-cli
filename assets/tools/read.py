@@ -3,7 +3,7 @@ import subprocess
 import asyncio
 from pathlib import Path
 from rich.console import Console
-from assets.registry import ask_tool
+from assets.core.registry import ask_tool
 
 console = Console()
 

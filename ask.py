@@ -12,7 +12,7 @@ from rich.markdown import Markdown
 # Initialize Architecture
 from assets.context import AskContext
 from assets.agent import Agent
-from assets.registry import TOOL_REGISTRY
+from assets.core.registry import TOOL_REGISTRY
 
 def _load_tool_modules():
     """Auto-discover and import all tool modules from assets/tools/"""

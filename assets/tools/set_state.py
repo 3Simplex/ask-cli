@@ -1,4 +1,4 @@
-from assets.registry import ask_tool
+from assets.core.registry import ask_tool
 
 @ask_tool(
     name="set_state",

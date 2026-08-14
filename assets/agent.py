@@ -4,7 +4,7 @@ import time
 import copy
 import asyncio
 import subprocess
-from .registry import TOOL_REGISTRY
+from .core.registry import TOOL_REGISTRY
 
 class Agent:
     async def _resolve_cmd(self, cmd: str) -> str:

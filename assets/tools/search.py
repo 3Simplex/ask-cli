@@ -1,7 +1,7 @@
 import json
 import subprocess
 import asyncio
-from assets.registry import ask_tool
+from assets.core.registry import ask_tool
 from rich.console import Console
 
 console = Console()
