@@ -182,37 +182,6 @@ class AskContext:
         nix_path = current_dir.parent.parent / "share" / "ask" / "assets"
         return dev_path if dev_path.exists() else nix_path
 
-    async def security_watcher(self, cmd: str) -> str:
-        sys_prompt = "You are a high-security command auditor.\nEvaluate the command based on:\n1. Privilege escalation attempts.\n2. Destructive filesystem operations.\n3. Network exfiltration.\n4. Obfuscated shell syntax.\n\nResponse Format:\n- If safe: 'Reasoning:[Brief explanation] P'\n- If unsafe: 'Reasoning: [Detailed reason] F'"
-        payload = {
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": f"Analyze this command: {cmd}"}
-            ],
-            "temperature": 0.1,
-            "max_tokens": 2048,
-            "reasoning_budget": 2048,
-            "model": self.config.get("model")
-        }
-        try:
-            async with self.watcher_lock:
-                r = await asyncio.to_thread(
-                    requests.post, f"{self.config['api_base']}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.config['api_key']}"},
-                    json=payload, timeout=60
-                )
-                r.raise_for_status()
-                msg = r.json()['choices'][0]['message']
-                response_text = msg.get('content') or msg.get('reasoning_content') or ""
-                if not response_text.strip():
-                    response_text = "Reasoning: Local API returned an empty string. F"
-
-            with open(self.audit_dir / "audit_log.jsonl", "a") as f:
-                f.write(json.dumps({"timestamp": datetime.now().isoformat(), "command": cmd, "decision": response_text}) + "\n")
-            return response_text
-        except Exception as e:
-            return f"Reasoning: Watcher Error ({str(e)}) F"
-
     async def async_prompt_user(self, prompt_text: str) -> str:
         """Safely prompt the user, even if stdin is being piped."""
         import sys
