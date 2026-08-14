@@ -81,6 +81,7 @@ async def main():
     parser.add_argument("-i", "--interactive", action="store_true", help="Enable tools")
     parser.add_argument("-c", "--continue-session", nargs="?", const="LAST", help="Continue session")
     parser.add_argument("-a", "--agent", type=str, default="ask", help="The agent profile to use (e.g., ask, linux, dev)")
+    parser.add_argument("-e", "--evaluator", type=str, help="Run an evaluator directly")
     parser.add_argument("--auto", action="store_true", help="Auto-approve safe commands")
     parser.add_argument("-s", "--sandbox", action="store_true", help="Run in bwrap sandbox")
     parser.add_argument("-r", "--routine", type=str, help="Load a specific routine")
@@ -164,6 +165,24 @@ async def main():
 
     # Now that we have a guaranteed model, fetch its true context size
     await ctx.init_context_limit()
+
+    # --- DIRECT EVALUATOR INVOCATION ---
+    if args.evaluator:
+        from assets.core.eval_runner import dispatch_evaluator
+        console.print(f"\n[bold cyan]⚡ Running Evaluator:[/bold cyan] {args.evaluator}")
+
+        # Pass the query, or a default string if they just passed a session
+        input_data = {"command": user_query} if user_query else {"input": "evaluate session"}
+
+        with Live(Spinner("dots", text=f"Evaluating...", style="cyan"), transient=True):
+            result = await dispatch_evaluator(ctx, args.evaluator, input_data, agent, internal_msgs)
+
+        color = "green" if result.passed else "red"
+        console.print(f"[bold {color}]Status:[/bold {color}] {result.status}")
+        if result.value is not None:
+            console.print(f"[{color}]Value:[/{color}] {result.value}")
+        console.print(f"[{color}]Reasoning:[/{color}] {result.reasoning}")
+        sys.exit(0 if result.passed else 1)
 
     with open(latest_file, 'w') as f:
         # Save the model to the thread state

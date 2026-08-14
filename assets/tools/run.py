@@ -6,6 +6,7 @@ from rich.panel import Panel
 from rich.console import Console
 
 from assets.core.registry import ask_tool
+from assets.core.eval_runner import dispatch_evaluator
 
 console = Console()
 
@@ -19,10 +20,14 @@ async def run_handler(ctx, agent, args, internal_msgs=None):
     if not cmd:
         return "Error: No command provided."
 
-    # Use context instead of shared globals
-    watch_result = await ctx.security_watcher(cmd)
-    alpha_chars = re.sub(r'[^a-zA-Z]', '', watch_result.upper())
-    watcher_passed = alpha_chars.endswith('P') if alpha_chars else False
+    # Dynamically grab the evaluator name (allows users to override via config)
+    eval_name = ctx.config.get("default_evaluator", "security_watcher")
+
+    # Run through our new engine
+    eval_result = await dispatch_evaluator(ctx, eval_name, {"command": cmd}, agent, internal_msgs)
+
+    watcher_passed = eval_result.passed
+    watch_result = eval_result.reasoning
 
     human_passed = False
     auto_approve = ctx.config.get('auto_approve_default', False)

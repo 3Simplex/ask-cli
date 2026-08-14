@@ -260,9 +260,20 @@ class Agent:
 
         return payload
 
-    def transition_to(self, new_state: str):
+    async def transition_to(self, new_state: str, internal_msgs=None) -> tuple[bool, str]:
         if new_state in self.states:
+            # Check for evaluator guards in states.json
+            state_cfg = self.states[new_state]
+            evaluators = state_cfg.get("evaluators", [])
+
+            if evaluators:
+                from assets.core.eval_runner import dispatch_evaluator
+                for eval_name in evaluators:
+                    result = await dispatch_evaluator(self.ctx, eval_name, {"state": new_state}, self, internal_msgs)
+                    if not result.passed:
+                        return False, f"Blocked by {eval_name}: {result.reasoning}"
+
             self._last_state = self.state_name
             self.state_name = new_state
-            return True
-        return False
+            return True, "OK"
+        return False, "Invalid state"
