@@ -1,4 +1,5 @@
 import asyncio
+import re
 import json
 import requests
 from rich.console import Console
@@ -33,7 +34,7 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
             eval_msgs = internal_msgs[-history_window:]
 
         # 3. Execute the Evaluator Plugin Handler
-        result = await handler(ctx, agent, input_data, eval_msgs)
+        result = await handler(ctx, agent, input_data, eval_msgs, config)
 
         # Enforce contract
         if not isinstance(result, EvalResult):
@@ -51,17 +52,27 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
         if config.get("api_override"):
             ctx.config["api_base"] = orig_api_base
 
-async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, mode: str = "boolean", temperature: float = 0.1) -> EvalResult:
+async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict) -> EvalResult:
     """Helper for plugins to standardly query the LLM and parse the mode."""
+    mode = config.get("mode", "boolean")
     payload = {
         "model": ctx.config.get("model"),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "temperature": temperature,
-        "max_tokens": 512
+        "temperature": config.get("temperature", 0.1)
     }
+
+    # Dynamically inject tokens/budgets from the plugin config
+    if "max_tokens" in config:
+        payload["max_tokens"] = config["max_tokens"]
+    if "reasoning_budget" in config:
+        payload["reasoning_budget"] = config["reasoning_budget"]
+
+    # Dynamic timeout (default to ctx timeout, fallback to 60s)
+    timeout = config.get("timeout", ctx.config.get("timeout", 60000) / 1000.0)
+    if timeout < 1: timeout = 60
 
     try:
         r = await asyncio.to_thread(
@@ -69,28 +80,40 @@ async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, mode: str = "
             f"{ctx.config['api_base']}/chat/completions",
             headers={"Authorization": f"Bearer {ctx.config.get('api_key', '')}"},
             json=payload,
-            timeout=30
+            timeout=timeout
         )
         r.raise_for_status()
-        response = r.json()["choices"][0]["message"].get("content", "")
+        msg = r.json()["choices"][0]["message"]
+
+        # Safely extract text whether it's in content or reasoning_content
+        response = msg.get("content") or msg.get("reasoning_content") or ""
+
+        if not response.strip():
+            return EvalResult(status="FAIL", reasoning="LLM returned an empty response.")
+
+        # Strip <think> tags and markdown wrappers so JSON parsing succeeds
+        clean_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+        clean_response = re.sub(r'^```json\s*', '', clean_response)
+        clean_response = re.sub(r'^```\s*', '', clean_response)
+        clean_response = re.sub(r'\s*```$', '', clean_response)
+        clean_response = clean_response.strip()
 
         if mode == "boolean":
             try:
-                parsed = json.loads(response)
+                parsed = json.loads(clean_response)
                 status = "PASS" if parsed.get("passed", False) else "FAIL"
-                return EvalResult(status=status, reasoning=parsed.get("reasoning", response))
+                return EvalResult(status=status, reasoning=parsed.get("reasoning", clean_response))
             except json.JSONDecodeError:
-                # Fallback if the LLM didn't return strict JSON
-                status = "PASS" if "PASS" in response.upper() else "FAIL"
+                status = "PASS" if "PASS" in clean_response.upper() else "FAIL"
                 return EvalResult(status=status, reasoning=response)
 
         elif mode == "structured":
             try:
-                parsed = json.loads(response)
+                parsed = json.loads(clean_response)
                 status = "SCORED" if parsed.get("passed", False) else "FAIL"
                 return EvalResult(status=status, value=parsed.get("score"), reasoning=parsed.get("reasoning", ""), metadata=parsed)
             except json.JSONDecodeError:
-                return EvalResult(status="FAIL", reasoning=f"Failed to parse structured JSON: {response}")
+                return EvalResult(status="FAIL", reasoning=f"Failed to parse structured JSON: {clean_response}")
 
         else: # unstructured
             return EvalResult(status="REPLY", value=response, reasoning=response)

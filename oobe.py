@@ -125,7 +125,7 @@ def setup() -> None:
             }
         },
         "active_provider": "llama-cpp-router",
-        "timeout": 1000,
+        "timeout": 120000,
         "max_turns": 100,
         "max_result_chars": 10000,
         "auto_approve_default": False,

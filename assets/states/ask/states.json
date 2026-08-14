@@ -31,6 +31,7 @@
     "description": "Use prune to prevent oom by cleaning the history.",
     "system_prompt": "Only use tools while in this state. Either use the 'gc' tool on stale and irrelevant messages or get out using 'set_state'.",
     "allowed_tools": ["gc", "set_state"],
+    "evaluators": ["state_guard"],
     "temperature": 0.1,
     "reasoning_budget": 4096
   }

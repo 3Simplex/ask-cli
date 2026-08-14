@@ -155,6 +155,65 @@ Sessions are saved to `~/.local/share/ask/threads/*.json`:
 
 Resume a session with `ask -c LAST` or `ask -c <session_name>`.
 
+## Evaluator Framework
+
+Evaluators are pluggable, AI-driven policy engines that assess data, commands, or state transitions before they execute. 
+
+### 1. Creating an Evaluator
+Create a Python file in `assets/evaluators/` using the `@ask_evaluator` decorator.
+
+```python
+from assets.core.registry import ask_evaluator, EvalResult
+from assets.core.eval_runner import llm_eval_call
+
+@ask_evaluator(
+    name="my_custom_guard",
+    description="Briefly explain what this checks.",
+    mode="boolean",       # "boolean", "structured", or "unstructured"
+    stateful=True,        # True = injects conversation history
+    history_window=5,     # Number of messages to inject if stateful
+    max_tokens=1024,
+    reasoning_budget=1024
+)
+async def my_guard_handler(ctx, agent, input_data, eval_msgs, config):
+    # input_data is a dict containing what you are evaluating
+    sys_prompt = "You are a judge. Output valid JSON: {\"passed\": true, \"reasoning\": \"...\"}"
+    user_prompt = f"Evaluate: {input_data}"
+    
+    # Call the framework helper
+    return await llm_eval_call(ctx, sys_prompt, user_prompt, config)
+```
+
+### 2. Using Evaluators
+Evaluators can be triggered in three ways:
+
+**Via CLI:**
+Test an evaluator independently or run it against an existing session.
+```bash
+ask -e security_watcher "rm -rf /"
+ask -e state_guard -c my_session "Evaluate transition to planning"
+```
+
+**Via Tools:**
+Tools can invoke evaluators to gate their own execution.
+```python
+from assets.core.eval_runner import dispatch_evaluator
+
+# Inside a tool handler
+eval_result = await dispatch_evaluator(ctx, "security_watcher", {"command": cmd}, agent, internal_msgs)
+if not eval_result.passed:
+    return f"Blocked: {eval_result.reasoning}"
+```
+
+**Via State Transitions:**
+Add the `evaluators` key to a state in `states.json` to prevent the agent from entering a state unless the evaluator approves.
+```json
+"prune": {
+  "allowed_tools": ["gc", "set_state"],
+  "evaluators": ["state_guard"]
+}
+```
+
 ## Configuration
 
 ### First-Run Setup (OOBE)

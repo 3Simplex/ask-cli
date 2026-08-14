@@ -7,9 +7,11 @@ from assets.core.eval_runner import llm_eval_call
     name="security_watcher",
     description="Audits shell commands for privilege escalation, destructive ops, or obfuscation.",
     mode="boolean",
-    stateful=False
+    stateful=False,
+    max_tokens=2048,
+    reasoning_budget=2048
 )
-async def security_watcher_handler(ctx, agent, input_data, eval_msgs=None):
+async def security_watcher_handler(ctx, agent, input_data, eval_msgs, config):
     cmd = input_data.get("command", "")
 
     sys_prompt = """You are a high-security command auditor.
@@ -24,10 +26,9 @@ Respond STRICTLY in JSON format:
 
     user_prompt = f"Analyze this command: {cmd}"
 
-    # 1. Ask the LLM via our core helper
-    result = await llm_eval_call(ctx, sys_prompt, user_prompt, mode="boolean")
+    # Pass config down to the helper
+    result = await llm_eval_call(ctx, sys_prompt, user_prompt, config)
 
-    # 2. Re-implement your audit logging transparently inside the plugin!
     if result.reasoning:
         try:
             with open(ctx.audit_dir / "audit_log.jsonl", "a") as f:
@@ -38,6 +39,6 @@ Respond STRICTLY in JSON format:
                 }
                 f.write(json.dumps(log_data) + "\n")
         except Exception:
-            pass # Fail silently on audit log write error
+            pass
 
     return result

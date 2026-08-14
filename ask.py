@@ -176,7 +176,8 @@ async def main():
     if args.continue_session:
         files = glob.glob(str(ctx.threads_dir / "*.json"))
         if args.continue_session != "LAST":
-            matched = [f for f in files if args.continue_session in f]
+            # Strict match to prevent grabbing other sessions with overlapping names
+            matched = [f for f in files if f.endswith(f"_{args.continue_session}.json")]
             latest_file = max(matched, key=os.path.getmtime) if matched else str(ctx.threads_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.continue_session}.json")
         elif files:
             latest_file = max(files, key=os.path.getmtime)
@@ -192,7 +193,12 @@ async def main():
                 loaded = json.load(f)
                 if isinstance(loaded, dict):
                     if "state" in loaded:
-                        agent.state_name = loaded["state"]
+                        # Prevent agents from inheriting invalid states from cross-loaded sessions
+                        if loaded["state"] in agent.states or loaded["state"] == "none":
+                            agent.state_name = loaded["state"]
+                        else:
+                            console.print(f"[bold yellow]Warning: State '{loaded['state']}' is invalid for agent '{agent.name}'. Resetting state.[/bold yellow]")
+                            agent.state_name = "none"
                     # Load the saved model for this session
                     if "model" in loaded:
                         ctx.config["model"] = loaded["model"]
@@ -342,4 +348,5 @@ if __name__ == "__main__":
     try: asyncio.run(main())
     except KeyboardInterrupt:
         console.print("\n[bold red]Operation aborted by user.[/bold red]")
-        sys.exit(0)
+        import os
+        os._exit(0) # Forces immediate termination of hanging background threads

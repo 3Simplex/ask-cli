@@ -195,7 +195,10 @@ class Agent:
             clean_base_raw = raw_content.split("### STATE ARCHITECTURE")[0].strip()
 
             # 3. Format map safely on the clean template
-            clean_base = clean_base_raw.format_map(fresh_ctx)
+            class SafeDict(dict):
+                def __missing__(self, key):
+                    return '{' + key + '}'
+            clean_base = clean_base_raw.format_map(SafeDict(fresh_ctx))
 
             # ONLY inject the tool glossary if interactive mode is ON
             if interactive:
