@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from assets.context import AskContext
 from assets.agent import Agent
 from assets.core.registry import TOOL_REGISTRY
+from assets.core.registry import EVAL_REGISTRY
 
 def _load_tool_modules():
     """Auto-discover and import all tool modules from assets/tools/"""
@@ -65,6 +66,51 @@ _load_evaluator_modules()
 
 console = Console()
 
+def _resolve_assets_dir():
+    """Standardized path resolver matching _load_tool_modules() fallbacks."""
+    if path := os.environ.get('ASK_ASSETS_DIR'):
+        return Path(path)
+    dev_path = Path(__file__).parent / "assets"
+    nix_path = Path(__file__).parent.parent / "share" / "ask"
+    return dev_path if dev_path.exists() else nix_path
+
+def _lazy_arg_check(argv):
+    """Intercept flags missing their values to restore old "lazy arg" behavior."""
+    assets_dir = _resolve_assets_dir()
+
+    def show_agents():
+        console.print("\n[bold cyan]📋 Available Agents:[/bold cyan]")
+        agents_path = assets_dir / "agents"
+        if agents_path.exists():
+            for f in sorted(agents_path.glob("*.json")):
+                console.print(f"  • {f.stem}")
+        else:
+            console.print("  (Directory not found)")
+
+    def show_evals():
+        console.print("\n[bold cyan]📋 Available Evaluators:[/bold cyan]")
+        if EVAL_REGISTRY:
+            for name in sorted(EVAL_REGISTRY.keys()): console.print(f"  • {name}")
+        else:
+            console.print("  (No evaluators registered)")
+
+    def show_routines():
+        console.print("\n[bold cyan]📋 Available Routines:[/bold cyan]")
+        routines_dir = Path.home() / ".local" / "share" / "ask" / "routines"
+        if routines_dir.exists():
+            for f in sorted(routines_dir.glob("*.md")): console.print(f"  • {f.stem}")
+        else:
+            console.print("  (Directory not found or no routines yet)")
+
+    for i, arg in enumerate(argv):
+        if arg in ("-e", "--evaluator") and (i + 1 >= len(argv) or argv[i+1].startswith("-")):
+            show_evals(); return True
+        elif arg in ("-r", "--routine") and (i + 1 >= len(argv) or argv[i+1].startswith("-")):
+            show_routines(); return True
+        elif arg in ("-a", "--agent") and (i + 1 >= len(argv) or argv[i+1].startswith("-")):
+            show_agents(); return True
+    return False
+
 def gen_id(prefix="msg"): return f"{prefix}_{uuid.uuid4().hex[:6]}"
 
 def sync_thread_file(filepath, msgs):
@@ -76,19 +122,22 @@ def sync_thread_file(filepath, msgs):
     except: pass
 
 async def main():
+    if _lazy_arg_check(sys.argv[1:]):
+        sys.exit(0)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("query", nargs="*", help="Your question")
     parser.add_argument("-i", "--interactive", action="store_true", help="Enable tools")
+    parser.add_argument("--auto", action="store_true", help="Auto-approve evaluated commands")
     parser.add_argument("-c", "--continue-session", nargs="?", const="LAST", help="Continue session")
-    parser.add_argument("-a", "--agent", type=str, default="ask", help="The agent profile to use (e.g., ask, linux, dev)")
-    parser.add_argument("-e", "--evaluator", type=str, help="Run an evaluator directly")
-    parser.add_argument("--auto", action="store_true", help="Auto-approve safe commands")
+    parser.add_argument("-a", "--agent", type=str, default="ask", help="Agent to call")
+    parser.add_argument("-e", "--evaluator", type=str, help="Evaluator to run")
+    parser.add_argument("-r", "--routine", type=str, help="Routine to load")
     parser.add_argument("-s", "--sandbox", action="store_true", help="Run in bwrap sandbox")
-    parser.add_argument("-r", "--routine", type=str, help="Load a specific routine")
-    parser.add_argument("--oobe", action="store_true", help="Run first-run setup wizard (even if config exists)")
+    parser.add_argument("--oobe", action="store_true", help="Run first-run setup wizard")
     args = parser.parse_args()
 
-    # ── Guard: no query + piped input → show help and exit ──
+    # --- Guard: no query + piped input → show help and exit ---
     if not args.query and sys.stdin.isatty():
         parser.print_help()
         sys.exit(0)
