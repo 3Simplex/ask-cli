@@ -12,7 +12,13 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
     if evaluator_name not in EVAL_REGISTRY:
         return EvalResult(status="FAIL", reasoning=f"Evaluator '{evaluator_name}' not registered.")
 
-    config = EVAL_REGISTRY[evaluator_name]
+    # Create a shallow copy so we don't permanently mutate the registry
+    config = EVAL_REGISTRY[evaluator_name].copy()
+
+    # Overlay any user overrides from config.json
+    user_overrides = ctx.config.get("evaluators", {}).get(evaluator_name, {})
+    config.update(user_overrides)
+
     handler = config["handler"]
     stateful = config.get("stateful", False)
     history_window = config.get("history_window", 10)
@@ -20,11 +26,14 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
     # 1. Dynamic Model & API Routing (Override context temporarily)
     orig_model = ctx.config.get("model")
     orig_api_base = ctx.config.get("api_base")
+    orig_api_key = ctx.config.get("api_key")
 
     if config.get("model_override"):
         ctx.config["model"] = config["model_override"]
     if config.get("api_override"):
         ctx.config["api_base"] = config["api_override"]
+    if config.get("api_key_override"):
+        ctx.config["api_key"] = config["api_key_override"]
 
     try:
         # 2. History Injection (If Stateful)
@@ -51,6 +60,8 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
             ctx.config["model"] = orig_model
         if config.get("api_override"):
             ctx.config["api_base"] = orig_api_base
+        if config.get("api_key_override"):
+            ctx.config["api_key"] = orig_api_key
 
 async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict) -> EvalResult:
     """Helper for plugins to standardly query the LLM and parse the mode."""

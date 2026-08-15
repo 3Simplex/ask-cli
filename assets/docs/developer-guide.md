@@ -169,9 +169,11 @@ from assets.core.eval_runner import llm_eval_call
 @ask_evaluator(
     name="my_custom_guard",
     description="Briefly explain what this checks.",
-    mode="boolean",       # "boolean", "structured", or "unstructured"
-    stateful=True,        # True = injects conversation history
-    history_window=5,     # Number of messages to inject if stateful
+    mode="boolean",                         # "boolean", "structured", or "unstructured"
+    stateful=True,                          # True = injects conversation history
+    model_override="mini-model",            # Routes just this evaluator to a different model (optional)
+    api_override="http://other-api/v1",     # Routes to a different API (optional)
+    history_window=5,                       # Number of messages to inject if stateful
     max_tokens=1024,
     reasoning_budget=1024
 )
@@ -236,7 +238,7 @@ API keys are encrypted using Fernet with a machine-specific key derived from the
 |--------|---------|-------------|
 | `api_base` | `http://localhost:9931/v1` | LLM API base URL |
 | `api_key` | `""` | Encrypted API key |
-| `timeout` | `1000` | Request timeout (ms) |
+| `timeout` | `120000` | Request timeout (ms) |
 | `max_turns` | `100` | Maximum autonomous tool loops |
 | `max_result_chars` | `10000` | Max output characters before truncation |
 | `auto_approve_default` | `false` | Auto-approve safe commands |
@@ -247,6 +249,12 @@ API keys are encrypted using Fernet with a machine-specific key derived from the
 | `search_retry_count` | `3` | Max search retries |
 | `search_retry_base_delay` | `10.0` | Base delay for retries (s) |
 | `search_timeout` | `30` | Search timeout (s) |
+| `evaluators.evaluator_name.model_override` | `"coder:7b"` | Model to override for an evaluator |
+| `evaluators.evaluator_name.timeout` | `30000` | Timeout for an evaluator (ms) |
+| `evaluators.evaluator_name.api_override` | `"https://api.openai.com/v1"` | API base URL to override for a specific evaluator |
+| `evaluators.evaluator_name.api_key_override` | `"sk-your-key-here"` | API key to override for a specific evaluator |
+| `evaluators.evaluator_name.max_tokens` | `4096` | Maximum number of tokens to generate for an evaluator response |
+
 
 ## Nix Installation
 
