@@ -49,6 +49,20 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
         if not isinstance(result, EvalResult):
             return EvalResult(status="FAIL", reasoning="Plugin did not return an EvalResult.")
 
+        # --- 3.5 Dispatch Post-Hooks ---
+        post_hooks = config.get("post_hooks", [])
+        if isinstance(post_hooks, list):
+            from assets.core.registry import HOOK_REGISTRY
+            for hook_name in post_hooks:
+                if hook_name in HOOK_REGISTRY:
+                    try:
+                        # Fire the hook!
+                        await HOOK_REGISTRY[hook_name]["handler"](ctx, evaluator_name, input_data, result)
+                    except Exception as e:
+                        console.print(f"[dim yellow]⚠ Hook '{hook_name}' failed: {e}[/dim yellow]")
+                else:
+                    console.print(f"[dim yellow]⚠ Warning: Hook '{hook_name}' not registered.[/dim yellow]")
+
         return result
 
     except Exception as e:

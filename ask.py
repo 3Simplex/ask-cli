@@ -60,9 +60,30 @@ def _load_evaluator_modules():
             console = Console()
             console.print(f"[dim]⚠ Failed to load evaluator {module_name}: {e}[/dim]")
 
-# Initialize both sets of plugins
+def _load_hook_modules():
+    """Auto-discover and import all hook modules from assets/hooks/"""
+    if path := os.environ.get('ASK_ASSETS_DIR'):
+        hook_dir = Path(path) / "hooks"
+    else:
+        hook_dir = Path(__file__).parent / "assets" / "hooks"
+        if not hook_dir.is_dir():
+            hook_dir = Path(__file__).parent.parent / "share" / "ask" / "assets" / "hooks"
+
+    if not hook_dir.is_dir():
+        return
+
+    for _, module_name, _ in pkgutil.iter_modules([str(hook_dir)]):
+        module_full = f"assets.hooks.{module_name}"
+        try:
+            importlib.import_module(module_full)
+        except Exception as e:
+            console = Console()
+            console.print(f"[dim]⚠ Failed to load hook {module_name}: {e}[/dim]")
+
+# Initialize all plugins
 _load_tool_modules()
 _load_evaluator_modules()
+_load_hook_modules()
 
 console = Console()
 

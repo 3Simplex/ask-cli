@@ -54,3 +54,13 @@ def ask_evaluator(name: str, description: str, mode: str = "structured", statefu
         }
         return func
     return decorator
+
+def ask_hook(name: str, description: str = ""):
+    """Decorator to register a post-evaluation hook."""
+    def decorator(func):
+        HOOK_REGISTRY[name] = {
+            "handler": func,
+            "description": description
+        }
+        return func
+    return decorator
