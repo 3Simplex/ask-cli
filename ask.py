@@ -229,7 +229,7 @@ async def main():
         except: pass
 
     if not internal_msgs:
-        identity = f"You are {agent.name}. {agent.profile.get('description', '')}"
+        identity = f"Agent Name: {agent.name}\nAgent Purpose: {agent.profile.get('description', '')}"
         internal_msgs.append({"id": "sys", "role": "system", "content": identity.replace("  ", " ").strip(), "gc": False})
 
     if user_query:

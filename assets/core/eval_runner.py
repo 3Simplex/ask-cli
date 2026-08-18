@@ -4,6 +4,7 @@ import json
 import requests
 from rich.console import Console
 from assets.core.registry import EVAL_REGISTRY, EvalResult
+from datetime import datetime
 
 console = Console()
 
@@ -43,6 +44,7 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
             eval_msgs = internal_msgs[-history_window:]
 
         # 3. Execute the Evaluator Plugin Handler
+        config["evaluator_name"] = evaluator_name
         result = await handler(ctx, agent, input_data, eval_msgs, config)
 
         # Enforce contract
@@ -76,6 +78,22 @@ async def dispatch_evaluator(ctx, evaluator_name: str, input_data: dict, agent=N
             ctx.config["api_base"] = orig_api_base
         if config.get("api_key_override"):
             ctx.config["api_key"] = orig_api_key
+
+def safe_json_parse(response: str, ctx, evaluator_name: str = "") -> EvalResult:
+    try:
+        data = json.loads(response)
+        return EvalResult(status="PASS", value=data.get("value"), reasoning=json.dumps(data, indent=2))
+    except json.JSONDecodeError as e:
+        debug_dir = ctx.data_dir / "eval_debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        debug_file = debug_dir / (f"{evaluator_name}_debug.json" if evaluator_name else "debug.json")
+        debug_file.write_text(json.dumps({
+            "timestamp": datetime.now().isoformat(),
+            "evaluator": evaluator_name,
+            "raw_response": response,
+            "parse_error": str(e)
+        }, indent=2))
+        return EvalResult(status="FAIL", reasoning=f"JSON parse error saved to {debug_file}")
 
 async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict) -> EvalResult:
     """Helper for plugins to standardly query the LLM and parse the mode."""
@@ -129,8 +147,7 @@ async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict)
                 status = "PASS" if parsed.get("passed", False) else "FAIL"
                 return EvalResult(status=status, reasoning=parsed.get("reasoning", clean_response))
             except json.JSONDecodeError:
-                status = "PASS" if "PASS" in clean_response.upper() else "FAIL"
-                return EvalResult(status=status, reasoning=response)
+                return safe_json_parse(clean_response, ctx, config.get("evaluator_name", ""))
 
         elif mode == "structured":
             try:
@@ -138,7 +155,7 @@ async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict)
                 status = "SCORED" if parsed.get("passed", False) else "FAIL"
                 return EvalResult(status=status, value=parsed.get("score"), reasoning=parsed.get("reasoning", ""), metadata=parsed)
             except json.JSONDecodeError:
-                return EvalResult(status="FAIL", reasoning=f"Failed to parse structured JSON: {clean_response}")
+                return safe_json_parse(clean_response, ctx, config.get("evaluator_name", ""))
 
         else: # unstructured
             return EvalResult(status="REPLY", value=response, reasoning=response)

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from assets.core.registry import ask_evaluator, EvalResult
 from assets.core.eval_runner import llm_eval_call
+from assets.core.eval_runner import safe_json_parse
 
 @ask_evaluator(
     name="gold_star_eval",
@@ -78,8 +79,10 @@ async def gold_star_evaluator_handler(ctx, agent, input_data, eval_msgs, config)
 
     try:
         data = json.loads(result.reasoning)
-    except json.JSONDecodeError:
-        return EvalResult(status="FAIL", reasoning="Invalid JSON output")
+    except json.JSONDecodeError as e:
+        # Use safe_json_parse to write the raw response + error to eval_debug/
+        return safe_json_parse(result.reasoning, ctx, config["evaluator_name"])
+
 
     stars = data.get("stars", 0)
     status = "PASS" if stars >= 4 else ("SCORED" if stars == 3 else "FAIL")

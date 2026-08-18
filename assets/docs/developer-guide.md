@@ -216,6 +216,87 @@ Add the `evaluators` key to a state in `states.json` to prevent the agent from e
 }
 ```
 
+## Post-Evaluation Hooks
+
+Hooks are side-effect callbacks that fire **after** an evaluator completes. They are useful for logging, notifications, or audit trails.
+
+### 1. Creating a Hook
+Create a Python file in `assets/hooks/` using the `@ask_hook` decorator:
+
+```python
+from assets.core.registry import ask_hook
+
+@ask_hook(name="my_hook", description="What this hook does.")
+async def my_hook_handler(ctx, eval_name: str, input_data: dict, result):
+    # result is an EvalResult from the evaluator
+    # Do something with the result (log, notify, etc.)
+    pass
+```
+
+### 2. Wiring Hooks to Evaluators
+Add a `post_hooks` list to an evaluator's config (in `config.json` or via decorator kwargs):
+
+```python
+@ask_evaluator(
+    name="my_guard",
+    description="My guard",
+    mode="boolean",
+    post_hooks=["webhook_notify"]  # List of registered hook names
+)
+async def my_guard_handler(ctx, agent, input_data, eval_msgs, config):
+    ...
+```
+
+Or via `config.json`:
+```json
+{
+  "webhook_url": "https://discord.com/api/webhooks/url_fallback_applies_to_all_unconfigured_evaluators...",
+  "evaluators": {
+    "my_guard": {
+      "post_hooks": ["webhook_notify"]
+    }
+  }
+}
+```
+
+### 3. Built-in Hook: Discord Webhook
+The `webhook_notify` hook sends evaluator results to a Discord webhook as an embed. Configure it in `config.json`:
+
+```json
+{
+  "evaluators": {
+    "security_watcher": {
+      "webhook_url": "https://discord.com/api/webhooks/url_configured_for_this_evaluator_only...",
+      "post_hooks": ["webhook_notify"]
+    }
+  }
+}
+```
+
+## Pluggable Evaluator: Gold-Star Session Review
+
+The `gold_star_eval` evaluator reviews an agent session log and scores it against a 5-criterion rubric:
+
+1. **Task Completion** — Did the agent accomplish the goal?
+2. **Efficiency & Tool Routing** — Were tools used wisely?
+3. **Safety & Data Preservation** — Were sensitive data and system integrity respected?
+4. **Communication & Clarity** — Was the agent's output clear and well-structured?
+5. **Context & OS/Env Fit** — Did the agent adapt to the environment?
+
+### Usage
+
+```bash
+# Evaluate a session by name
+ask -e gold_star_eval "my_session_name"
+
+# Evaluate with optional feedback
+ask -e gold_star_eval "my_session_name" --feedback "The agent missed a step"
+```
+
+### Output
+
+Returns a structured JSON with per-criterion scores (1-5), an overall star rating, and notes on what went well, what went wrong, and recommendations.
+
 ## Configuration
 
 ### First-Run Setup (OOBE)
@@ -249,11 +330,13 @@ API keys are encrypted using Fernet with a machine-specific key derived from the
 | `search_retry_count` | `3` | Max search retries |
 | `search_retry_base_delay` | `10.0` | Base delay for retries (s) |
 | `search_timeout` | `30` | Search timeout (s) |
+| `webhook_url` | `""` | Discord webhook URL for `webhook_notify` hook |
 | `evaluators.evaluator_name.model_override` | `"coder:7b"` | Model to override for an evaluator |
 | `evaluators.evaluator_name.timeout` | `30000` | Timeout for an evaluator (ms) |
 | `evaluators.evaluator_name.api_override` | `"https://api.openai.com/v1"` | API base URL to override for a specific evaluator |
 | `evaluators.evaluator_name.api_key_override` | `"sk-your-key-here"` | API key to override for a specific evaluator |
 | `evaluators.evaluator_name.max_tokens` | `4096` | Maximum number of tokens to generate for an evaluator response |
+| `evaluators.evaluator_name.post_hooks` | `[]` | List of hook names to fire after this evaluator |
 
 
 ## Nix Installation
@@ -283,7 +366,7 @@ pkgs.stdenv.mkDerivation {
         pkgs.lynx
         pkgs.bubblewrap
         pkgs.coreutils
-        pkgs.gnugrep
+        pkgs.gnupg
       ]}
   '';
 }
