@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os, sys, json, argparse, glob, asyncio, requests, subprocess, pkgutil, importlib, uuid
-
 from pathlib import Path
 from datetime import datetime
 
@@ -99,37 +98,67 @@ def _lazy_arg_check(argv):
     """Intercept flags missing their values to restore old "lazy arg" behavior."""
     assets_dir = _resolve_assets_dir()
 
-    def show_agents():
-        console.print("\n[bold cyan]📋 Available Agents:[/bold cyan]")
-        agents_path = assets_dir / "agents"
-        if agents_path.exists():
-            for f in sorted(agents_path.glob("*.json")):
-                console.print(f"  • {f.stem}")
-        else:
-            console.print("  (Directory not found)")
-
     def show_evals():
         console.print("\n[bold cyan]📋 Available Evaluators:[/bold cyan]")
         if EVAL_REGISTRY:
             for name in sorted(EVAL_REGISTRY.keys()): console.print(f"  • {name}")
-        else:
-            console.print("  (No evaluators registered)")
+        else: console.print("  (No evaluators registered)")
 
     def show_routines():
         console.print("\n[bold cyan]📋 Available Routines:[/bold cyan]")
         routines_dir = Path.home() / ".local" / "share" / "ask" / "routines"
         if routines_dir.exists():
             for f in sorted(routines_dir.glob("*.md")): console.print(f"  • {f.stem}")
+        else: console.print("  (Directory not found or no routines yet)")
+
+    def show_agents():
+        console.print("\n[bold cyan]📋 Available Agents:[/bold cyan]")
+        agents_path = assets_dir / "agents"
+        if agents_path.exists():
+            for f in sorted(agents_path.glob("*.json")): console.print(f"  • {f.stem}")
+        else: console.print("  (Directory not found)")
+
+    def print_eval_help(name):
+        if name not in EVAL_REGISTRY:
+            console.print(f"[bold red]Evaluator '{name}' not found.[/bold red]")
+            return
+        info = EVAL_REGISTRY[name]
+        console.print(f"\n[bold cyan]Evaluator: {name}[/bold cyan]")
+        console.print(f"[dim]Description:[/dim] {info.get('description', 'No description')}")
+        if info.get("help_text"):
+            console.print(f"[dim]Help:[/dim] {info['help_text']}")
+        if info.get("usage"):
+            console.print(f"[dim]Usage:[/dim] {info['usage'].rstrip()}")
         else:
-            console.print("  (Directory not found or no routines yet)")
+            console.print(f"[dim]Usage:[/dim] ask -e {name} <input_data>")
 
     for i, arg in enumerate(argv):
-        if arg in ("-e", "--evaluator") and (i + 1 >= len(argv) or argv[i+1].startswith("-")):
-            show_evals(); return True
-        elif arg in ("-r", "--routine") and (i + 1 >= len(argv) or argv[i+1].startswith("-")):
-            show_routines(); return True
-        elif arg in ("-a", "--agent") and (i + 1 >= len(argv) or argv[i+1].startswith("-")):
-            show_agents(); return True
+        if arg in ("-e", "--evaluator"):
+            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+                val = argv[i+1]
+                # Catch: ask -e <eval_name> --help
+                if i + 2 < len(argv) and argv[i+2] == "--help":
+                    print_eval_help(val)
+                    return True
+                # Valid value provided, let argparse handle it
+                continue
+            else:
+                # Missing value: ask -e --help  OR  ask -e
+                show_evals()
+                return True
+        elif arg in ("-r", "--routine"):
+            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+                continue
+            else:
+                show_routines()
+                return True
+        elif arg in ("-a", "--agent"):
+            if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+                continue
+            else:
+                show_agents()
+                return True
+
     return False
 
 def gen_id(prefix="msg"): return f"{prefix}_{uuid.uuid4().hex[:6]}"
@@ -146,8 +175,8 @@ async def main():
     if _lazy_arg_check(sys.argv[1:]):
         sys.exit(0)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("query", nargs="*", help="Your question")
+    parser = argparse.ArgumentParser(description="Agent State Kit CLI")
+    parser.add_argument("query", nargs="*", help="Your question or evaluator input")
     parser.add_argument("-i", "--interactive", action="store_true", help="Enable tools")
     parser.add_argument("--auto", action="store_true", help="Auto-approve evaluated commands")
     parser.add_argument("-c", "--continue-session", nargs="?", const="LAST", help="Continue session")
@@ -242,13 +271,28 @@ async def main():
     # Now that we have a guaranteed model, fetch its true context size
     await ctx.init_context_limit()
 
-    # --- DIRECT EVALUATOR INVOCATION ---
+    # Direct Evaluator Invocation
     if args.evaluator:
         from assets.core.eval_runner import dispatch_evaluator
         console.print(f"\n[bold cyan]⚡ Running Evaluator:[/bold cyan] {args.evaluator}")
 
-        # Pass the query, or a default string if they just passed a session
-        input_data = {"command": user_query} if user_query else {"input": "evaluate session"}
+        # Resolve the evaluator's expected argument schema
+        ev_config = EVAL_REGISTRY[args.evaluator]
+        expected_args = ev_config.get("expected_args", {})
+
+        # NOTE: Evaluators MUST declare expected_args in their decorator.
+        # Single-arg: all CLI tokens join as that arg.
+        # Multi-arg: one token per arg, left-to-right.
+        # Map args.query to expected_args keys in order.
+        query_parts = args.query
+        input_data = {}
+
+        arg_keys = list(expected_args.keys())
+        if len(arg_keys) == 1:
+            input_data[arg_keys[0]] = " ".join(query_parts)
+        else:
+            for i, key in enumerate(arg_keys):
+                input_data[key] = query_parts[i] if i < len(query_parts) else ""
 
         with Live(Spinner("dots", text=f"Evaluating...", style="cyan"), transient=True):
             result = await dispatch_evaluator(ctx, args.evaluator, input_data, agent, internal_msgs)

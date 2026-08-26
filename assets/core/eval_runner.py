@@ -134,12 +134,15 @@ async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict)
         if not response.strip():
             return EvalResult(status="FAIL", reasoning="LLM returned an empty response.")
 
-        # Strip <think> tags and markdown wrappers so JSON parsing succeeds
-        clean_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-        clean_response = re.sub(r'^```json\s*', '', clean_response)
-        clean_response = re.sub(r'^```\s*', '', clean_response)
-        clean_response = re.sub(r'\s*```$', '', clean_response)
-        clean_response = clean_response.strip()
+        # Strip markdown wrappers so JSON parsing succeeds
+        clean_response = response.strip()
+        match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean_response, re.DOTALL | re.IGNORECASE)
+        if match:
+            clean_response = match.group(1)
+        else:
+            clean_response = re.sub(r'^```(?:json)?\s*', '', clean_response, flags=re.IGNORECASE)
+            clean_response = re.sub(r'\s*```$', '', clean_response)
+            clean_response = clean_response.strip()
 
         if mode == "boolean":
             try:

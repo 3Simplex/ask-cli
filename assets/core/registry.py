@@ -41,7 +41,7 @@ def ask_tool(name: str, description: str, schema_properties: dict):
         return func
     return decorator
 
-def ask_evaluator(name: str, description: str, mode: str = "structured", stateful: bool = False, history_window: int = 10, **kwargs):
+def ask_evaluator(name: str, description: str, mode: str = "structured", stateful: bool = False, history_window: int = 10, expected_args: dict = None, **kwargs):
     """Decorator to register an evaluator."""
     def decorator(func):
         EVAL_REGISTRY[name] = {
@@ -50,10 +50,14 @@ def ask_evaluator(name: str, description: str, mode: str = "structured", statefu
             "stateful": stateful,
             "history_window": history_window,
             "description": description,
+            "expected_args": expected_args or {},
+            "usage": kwargs.pop("usage", ""),
+            "help_text": kwargs.pop("help_text", ""),
             **kwargs  # Captures model_override, api_override, etc.
         }
         return func
     return decorator
+
 
 def ask_hook(name: str, description: str = ""):
     """Decorator to register a post-evaluation hook."""

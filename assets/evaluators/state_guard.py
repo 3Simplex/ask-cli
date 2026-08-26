@@ -8,7 +8,10 @@ from assets.core.eval_runner import llm_eval_call
     stateful=True,
     history_window=5,
     max_tokens=1024,
-    reasoning_budget=1024
+    reasoning_budget=1024,
+    expected_args={"state": str},
+    help_text="State transition guardian. Reviews recent conversation history to validate if a requested state change is logical and unprompted.",
+    usage="ask -e state_guard 'planning' "
 )
 async def state_guard_handler(ctx, agent, input_data, eval_msgs, config):
     target_state = input_data.get("state", "unknown")
