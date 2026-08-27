@@ -158,6 +158,9 @@ class Agent:
             for name, cfg in self.states.items()
         }
 
+        # Dynamic states: created at runtime by the agent
+        self.dynamic_states = {}
+
     async def get_api_payload(self, messages, fresh_ctx, interactive=False):
         # 1. Deepcopy so we don't pollute internal_msgs permanently
         messages = copy.deepcopy(messages)
@@ -172,20 +175,31 @@ class Agent:
             return target
 
         # If uninitialized, strictly limit tools to 'set_state'
-        if self.state_name not in self.states:
+        if self.state_name not in self.states and self.state_name not in self.dynamic_states:
             tools_whitelist = ["set_state"]
             state_prompt = "You are currently uninitialized (state: 'none')."
             temperature = 0.1
             reasoning_budget = 0
         else:
-            templated_state = _apply_templates(self.states[self.state_name], fresh_ctx)
-            state_tools = templated_state.get("allowed_tools", [])
-            agent_whitelist = self.profile.get("tools", [])
-            # Intersect state tools and agent profile tools
-            tools_whitelist = [t for t in state_tools if t in agent_whitelist]
-            state_prompt = templated_state.get("system_prompt", "")
-            temperature = templated_state.get("temperature", 0.1)
-            reasoning_budget = templated_state.get("reasoning_budget", 0)
+            # Check dynamic states first
+            if self.state_name in self.dynamic_states:
+                templated_state = _apply_templates(self.dynamic_states[self.state_name], fresh_ctx)
+                state_tools = templated_state.get("allowed_tools", [])
+                agent_whitelist = self.profile.get("tools", [])
+                # Intersect state tools and agent profile tools
+                tools_whitelist = [t for t in state_tools if t in agent_whitelist]
+                state_prompt = templated_state.get("system_prompt", "")
+                temperature = templated_state.get("temperature", 0.1)
+                reasoning_budget = templated_state.get("reasoning_budget", 0)
+            else:
+                templated_state = _apply_templates(self.states[self.state_name], fresh_ctx)
+                state_tools = templated_state.get("allowed_tools", [])
+                agent_whitelist = self.profile.get("tools", [])
+                # Intersect state tools and agent profile tools
+                tools_whitelist = [t for t in state_tools if t in agent_whitelist]
+                state_prompt = templated_state.get("system_prompt", "")
+                temperature = templated_state.get("temperature", 0.1)
+                reasoning_budget = templated_state.get("reasoning_budget", 0)
 
         # Inject instructions into the system message dynamically
         system_msg_index = next((i for i, m in enumerate(messages) if m["role"] == "system"), None)
@@ -202,12 +216,19 @@ class Agent:
 
             # ONLY inject the tool glossary if interactive mode is ON
             if interactive:
-                # 1. Build a dynamic map of all states
+                # 1. Build a dynamic map of all states (static + dynamic)
                 state_directory = []
                 for s_name, s_cfg in self.states.items():
                     s_tools = [t for t in s_cfg.get("allowed_tools", []) if t in self.profile.get("tools", [])]
                     s_desc = s_cfg.get("description", "No description provided.")
                     state_directory.append(f"  - {s_name.upper()}: {s_tools}\n    Purpose: {s_desc}")
+
+                # Dynamic states
+                for s_name, s_cfg in self.dynamic_states.items():
+                    s_tools = [t for t in s_cfg.get("allowed_tools", []) if t in self.profile.get("tools", [])]
+                    s_desc = s_cfg.get("description", "No description provided.")
+                    state_directory.append(f"  - {s_name.upper()} (DYNAMIC): {s_tools}\n    Purpose: {s_desc}")
+
                 state_directory_str = "\n".join(state_directory)
 
                 # 2. Build a Tool Glossary so it knows what all tools do
@@ -241,7 +262,7 @@ class Agent:
 
                     # DYNAMIC OVERRIDE: Inject this agent's specific states into the set_state tool
                     if name == "set_state":
-                        available_states = list(self.states.keys())
+                        available_states = list(self.states.keys()) + list(self.dynamic_states.keys())
                         schema["function"]["description"] = f"Change compute state. Available states: {', '.join(available_states)}"
                         schema["function"]["parameters"]["properties"]["state"]["enum"] = available_states
 
@@ -264,8 +285,25 @@ class Agent:
         return payload
 
     async def transition_to(self, new_state: str, internal_msgs=None) -> tuple[bool, str]:
+        # Check dynamic states first
+        if new_state in self.dynamic_states:
+            state_cfg = self.dynamic_states[new_state]
+            # Check for evaluator guards in dynamic states
+            evaluators = state_cfg.get("evaluators", [])
+
+            if evaluators:
+                from assets.core.eval_runner import dispatch_evaluator
+                for eval_name in evaluators:
+                    result = await dispatch_evaluator(self.ctx, eval_name, {"state": new_state}, self, internal_msgs)
+                    if not result.passed:
+                        return False, f"Blocked by {eval_name}: {result.reasoning}"
+
+            self._last_state = self.state_name
+            self.state_name = new_state
+            return True, "OK"
+
+        # Check static states
         if new_state in self.states:
-            # Check for evaluator guards in states.json
             state_cfg = self.states[new_state]
             evaluators = state_cfg.get("evaluators", [])
 
@@ -279,4 +317,9 @@ class Agent:
             self._last_state = self.state_name
             self.state_name = new_state
             return True, "OK"
-        return False, "Invalid state"
+
+        return False, f"Invalid state '{new_state}'. Valid states: {', '.join(self.states.keys())} + dynamic states."
+
+    def get_all_states(self) -> dict:
+        """Return all states (static + dynamic) for serialization."""
+        return {**self.states, **self.dynamic_states}

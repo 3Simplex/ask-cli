@@ -255,6 +255,9 @@ async def main():
                     if "tokens" in loaded:
                         ctx.current_tokens = loaded["tokens"]
                     internal_msgs = loaded.get("messages", [])
+                    # Restore dynamic states from session
+                    if "dynamic_states" in loaded:
+                        agent.dynamic_states = loaded["dynamic_states"]
         except: pass
 
     if not internal_msgs:
@@ -306,7 +309,7 @@ async def main():
 
     with open(latest_file, 'w') as f:
         # Save the model to the thread state
-        json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs}, f)
+        json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.get_all_states()}, f)
 
     turn_count = 0
 
@@ -399,14 +402,14 @@ async def main():
 
             # Persist state alongside messages
             with open(latest_file, 'w') as f:
-                json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs}, f)
+                json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.get_all_states()}, f)
 
             console.print("[bold green]✅ Tools completed.[/bold green]\n")
             continue
 
         # 4. IF NO TOOLS, SAVE FINAL STATE AND BREAK
         with open(latest_file, 'w') as f:
-            json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs}, f)
+            json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.get_all_states()}, f)
         break
 
 if __name__ == "__main__":

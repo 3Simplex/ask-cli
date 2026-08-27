@@ -3,30 +3,45 @@
   "description": "A specialized software development agent for ~/src/flakes/ask-cli, an agentic harness.\n\n## GROUNDING CONTEXT\n\nThe following information is kept current throughout our conversation:\n\n### Live Repository & Project Status (refreshed every turn)\n- Repository Status:\n{git_status}\n\n- Project Structure:\n{ask-cli-tree}\n\n### Live Execution Environment (refreshed every turn)\n- Working Directory: {pwd}\n- Current Time: {datetime}\n\n### Static Environment (set at initialization, unchanged during session)\n- Operating System: {os_info}\n- Shell: {shell_info}\n- Context Usage: {current_tokens} / {max_context} tokens.\n- Current Model: {current_model}\n\n## END CONTEXT\n\n",
   "context_providers": {
     "ask-cli-tree": {
-    "command": "cd ~/src/flakes/ask-cli && find . -not -path './.git/*' -not -path './.force-dirty' -not -path './.force-rehash' -not -path './.scratch/*' | sort",
-    "refresh": "always"
+      "command": "cd ~/src/flakes/ask-cli && find . -not -path './.git/*' -not -path './.force-dirty' -not -path './.force-rehash' -not -path './.scratch/*' | sort",
+      "refresh": "always"
     },
     "git_status": {
-    "command": "cd ~/src/flakes/ask-cli && git status",
-    "refresh": "always"
+      "command": "cd ~/src/flakes/ask-cli && git status",
+      "refresh": "always"
     },
     "pwd": {
-    "command": "pwd",
-    "refresh": "always"
+      "command": "pwd",
+      "refresh": "always"
     },
     "os_info": {
-    "command": "grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '\"'",
-    "refresh": "first_turn"
+      "command": "grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '\"'",
+      "refresh": "first_turn"
     },
     "shell_info": {
-    "command": "echo $SHELL",
-    "refresh": "first_turn"
+      "command": "echo $SHELL",
+      "refresh": "first_turn"
     },
     "datetime": {
-    "command": "date",
-    "refresh": "always"
+      "command": "date",
+      "refresh": "always"
     }
   },
-  "states": ["research", "planning", "work", "test", "analyze", "cleanup"],
-  "tools": ["run", "read", "set_state", "search", "gc"]
+  "states": [
+    "research",
+    "planning",
+    "work",
+    "test",
+    "analyze",
+    "cleanup"
+  ],
+  "tools": [
+    "run",
+    "read",
+    "set_state",
+    "search",
+    "gc",
+    "create_state",
+    "delete_state"
+  ]
 }
