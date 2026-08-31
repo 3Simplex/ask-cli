@@ -28,11 +28,7 @@
     }
   },
   "states": [
-    "research",
-    "planning",
-    "work",
-    "test",
-    "analyze",
+    "initialization",
     "cleanup"
   ],
   "tools": [
@@ -40,8 +36,8 @@
     "read",
     "set_state",
     "search",
-    "gc",
     "create_state",
-    "delete_state"
+    "delete_state",
+    "gc"
   ]
 }

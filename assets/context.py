@@ -63,32 +63,23 @@ class AskContext:
         with open(config_path) as f:
             self.config = json.load(f)
 
-        # --- Resolve active provider settings & decrypt API key ---
-        active = self.config.get("active_provider")
-        if active and "providers" in self.config:
-            provider = self.config["providers"].get(active, {})
-            self.config["api_base"] = provider.get("api_base")
-            self.config["server_path"] = provider.get("server_path")
-            self.config["models_dir"] = provider.get("models_dir")
-
-            enc_key = provider.get("api_key", "")
-            if enc_key:
-                import base64, hashlib
-                from cryptography.fernet import Fernet
-
-                # Reconstruct the machine-specific key
-                fernet_key = base64.urlsafe_b64encode(
-                    hashlib.sha256(os.uname().nodename.encode()).digest()
-                )
-                try:
-                    self.config["api_key"] = Fernet(fernet_key).decrypt(enc_key.encode()).decode()
-                except Exception:
-                    self.config["api_key"] = ""
-            else:
-                self.config["api_key"] = ""
-        # ---------------------------------------------------------
-
+        self.current_tokens = 0
+        self.max_tokens = 8192  # Default fallback
         self.active_routine = None
+
+        # Override config with CLI flags if provided
+        if args:
+            if getattr(args, 'auto', False):
+                self.config['auto_approve_default'] = True
+            if getattr(args, 'sandbox', False):
+                self.config['use_sandbox_default'] = True
+            if getattr(args, 'routine', None):
+                self.active_routine = args.routine
+
+        # Initialize active provider dynamically
+        req_provider = getattr(args, 'api_provider', None) if args else None
+        initial_provider = req_provider or self.config.get("active_provider")
+        self.switch_provider(initial_provider)
 
         # Override config with CLI flags if provided
         if args:
@@ -129,47 +120,32 @@ class AskContext:
     async def init_context_limit(self):
         """Fetch the true context limit for the active session model."""
         model = self.config.get("model")
-        if not model:
+        if not model or not hasattr(self, 'driver'):
             return
 
-        api_base = self.config.get("api_base", "").removesuffix("/v1")
-        import urllib.parse
-        encoded_model = urllib.parse.quote(model)
-
         try:
-            # Route exactly to the model we are about to use
-            r = await asyncio.to_thread(requests.get, f"{api_base}/props?model={encoded_model}", timeout=2)
-            if r.status_code == 200:
-                data = r.json()
-                n_ctx = data.get("default_generation_settings", {}).get("n_ctx", 0)
-                if n_ctx > 0:
-                    self.max_tokens = n_ctx
-        except Exception:
-            pass
+            limit = await self.driver.get_context_limit(model)
+            if limit > 0:
+                self.max_tokens = limit
+                console.print(f"[dim]⚡ Context window set to {self.max_tokens:,} tokens ({model})[/dim]")
+        except Exception as e:
+            console.print(f"[dim yellow]⚠ Could not detect context limit: {e}[/dim yellow]")
 
     async def measure_tokens(self, messages: list) -> int:
-        """Use the server's tokenizer to proactively count tokens in a message array."""
-        if not self.config.get("api_base") or not self.config.get("model"):
-            return self.current_tokens
+        """Proactively measure tokens using driver or fallback heuristic."""
+        model = self.config.get("model", "")
+        if hasattr(self, 'driver'):
+            try:
+                tokens = await self.driver.measure_tokens(model, messages)
+                if tokens > 0:
+                    self.current_tokens = tokens
+                    return self.current_tokens
+            except Exception:
+                pass
 
-        api_base = self.config["api_base"].removesuffix("/v1")
-        payload = {
-            "model": self.config["model"],
-            "messages": messages
-        }
-
-        try:
-            r = await asyncio.to_thread(
-                requests.post,
-                f"{api_base}/v1/chat/completions/input_tokens",
-                headers={"Authorization": f"Bearer {self.config.get('api_key', '')}"},
-                json=payload,
-                timeout=5
-            )
-            if r.status_code == 200:
-                self.current_tokens = r.json().get("input_tokens", self.current_tokens)
-        except Exception:
-            pass
+        # Fallback character estimation if driver returns 0
+        total_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        self.current_tokens = int(total_chars / 3.5)
         return self.current_tokens
 
     def _resolve_assets_dir(self) -> Path:
@@ -198,92 +174,193 @@ class AskContext:
 
         return await asyncio.to_thread(_prompt)
 
-    async def ensure_server_running(self):
-        # Only run if cold-start parameters are provided
-        if not self.config.get("server_path") or not self.config.get("models_dir"):
-            return
+    def switch_provider(self, provider_name: str):
+        """Configure runtime settings, decrypt API key, and instantiate driver for a provider."""
+        providers = self.config.get("providers", {})
+        if provider_name and provider_name in providers:
+            self.active_provider_name = provider_name
+            provider = providers[provider_name]
+            self.config["api_base"] = provider.get("api_base")
+            self.config["driver"] = provider.get("driver") or (
+                "llama-cpp-router" if "llama" in provider_name or provider.get("type") == "router" else "openai-compatible"
+            )
+            if provider.get("default_model"):
+                self.config.setdefault("model", provider.get("default_model"))
+            if provider.get("max_tokens"):
+                self.max_tokens = provider.get("max_tokens")
 
-        # Check if it's already running
-        try:
-            r = await asyncio.to_thread(requests.get, f"{self.config['api_base']}/models", timeout=1)
-            if r.status_code == 200:
-                return
-        except Exception:
-            pass
+            enc_key = provider.get("api_key", "")
+            if enc_key:
+                import base64, hashlib
+                from cryptography.fernet import Fernet
 
-        import urllib.parse
-        import subprocess
-
-        parsed = urllib.parse.urlparse(self.config["api_base"])
-        port = str(parsed.port) if parsed.port else "9931"
-
-        console.print(f"[bold yellow]Starting local llama-server in background on port {port}...[/bold yellow]")
-
-        # Divert server output to a log file instead of polluting the terminal
-        log_file = open(self.data_dir / "llama-server.log", "w")
-        subprocess.Popen([
-            self.config["server_path"],
-            "--models-dir", self.config["models_dir"],
-            "--port", port
-        ], stdout=log_file, stderr=subprocess.STDOUT)
-
-        start_time = time.time()
-        with console.status("[cyan]Waiting for server to become ready...[/cyan]"):
-            while time.time() - start_time < 30:
+                fernet_key = base64.urlsafe_b64encode(
+                    hashlib.sha256(os.uname().nodename.encode()).digest()
+                )
                 try:
-                    r = await asyncio.to_thread(requests.get, f"{self.config['api_base']}/models", timeout=1)
-                    if r.status_code == 200:
-                        console.print("[bold green]✓ llama-server ready[/bold green]")
-                        return
+                    self.config["api_key"] = Fernet(fernet_key).decrypt(enc_key.encode()).decode()
                 except Exception:
-                    await asyncio.sleep(1)
+                    self.config["api_key"] = ""
+            else:
+                self.config["api_key"] = ""
+        else:
+            self.active_provider_name = provider_name or ""
+            self.config.setdefault("driver", "openai-compatible")
 
-        console.print("[bold red]✗ llama-server failed to start within 30 seconds. Check logs in ~/.local/share/ask/llama-server.log[/bold red]")
+        from assets.apis import get_api_driver
+        provider_cfg = providers.get(self.active_provider_name, {})
+        provider_cfg = {
+            **provider_cfg,
+            "api_base": self.config.get("api_base"),
+            "api_key": self.config.get("api_key"),
+            "provider_name": self.active_provider_name
+        }
+        self.driver = get_api_driver(self.config.get("driver", "openai-compatible"), provider_cfg, ctx=self)
 
-    async def select_model_if_needed(self):
-        # If the model is already set (e.g. resumed from a saved thread), skip.
-        if self.config.get("model"):
+    def get_driver_for_provider(self, provider_name: str):
+        """Instantiate a driver instance for any configured provider without modifying active context."""
+        from assets.apis import get_api_driver
+        providers = self.config.get("providers", {})
+        pcfg = {**providers.get(provider_name, {}), "provider_name": provider_name}
+        driver_type = pcfg.get("driver") or (
+            "llama-cpp-router" if "llama" in provider_name or pcfg.get("type") == "router" else "openai-compatible"
+        )
+        return get_api_driver(driver_type, pcfg, ctx=self)
+
+    async def ensure_current_server_running(self):
+        """Start daemon for currently selected provider if not already running."""
+        if not hasattr(self, 'driver'):
             return
 
-        api_base = self.config.get('api_base', '')
-        base_url = api_base.removesuffix("/v1")
+        if await self.driver.is_running():
+            return
 
-        try:
-            # Query the router for available models
-            r = await asyncio.to_thread(requests.get, f"{base_url}/models", timeout=2)
-            if r.status_code != 200:
-                return
+        console.print(f"[bold yellow]Provider '{self.active_provider_name}' daemon is not running. Starting daemon...[/bold yellow]")
+        success, msg = await self.driver.start_daemon()
+        if success:
+            console.print(f"[bold green]✓ {msg}[/bold green]")
+            start_time = time.time()
+            with console.status("[cyan]Waiting for daemon to respond...[/cyan]"):
+                while time.time() - start_time < 15:
+                    if await self.driver.is_running():
+                        console.print("[bold green]✓ Provider ready[/bold green]")
+                        return
+                    await asyncio.sleep(1)
+        else:
+            console.print(f"[dim yellow]Notice: {msg}[/dim yellow]")
 
-            models_data = r.json().get("data", [])
-            if not models_data:
-                return
+    async def resolve_provider_and_model(self, has_explicit_provider: bool = False):
+        """Unified interactive provider and model selection."""
+        providers = self.config.get("providers", {})
+        if not providers:
+            return
 
-            # If exactly one model is already loaded, seamlessly default to it
-            loaded = [m["id"] for m in models_data if m.get("status", {}).get("value") == "loaded"]
-            if len(loaded) == 1:
-                self.config["model"] = loaded[0]
-                return
+        # 1. If model is already set (e.g. resumed thread session)
+        if self.config.get("model"):
+            await self.ensure_current_server_running()
+            if hasattr(self, 'driver') and await self.driver.is_running():
+                loaded = await self.driver.list_loaded_models()
+                if self.config["model"] not in loaded:
+                    await self.driver.load_model(self.config["model"])
+            return
 
-            # Otherwise, prompt the user to select one for the session
-            console.print("\n[bold cyan]Select a model to use for this session:[/bold cyan]")
-            for i, m in enumerate(models_data):
-                status = m.get("status", {}).get("value", "unknown")
-                icon = "✅" if status == "loaded" else "⏸"
-                console.print(f"  [{i+1}] {icon} {m.get('id', 'unknown')} ({status})")
+        # 2. If user explicitly passed -ap <provider>
+        if has_explicit_provider and self.active_provider_name:
+            await self.ensure_current_server_running()
+            await self._select_model_for_active_provider()
+            return
 
-            while True:
-                ans = await self.async_prompt_user(f"\nEnter model number (1-{len(models_data)}): ")
+        # 3. Check for hot/loaded models across all configured providers
+        hot_models = []
+        for p_name in providers:
+            d = self.get_driver_for_provider(p_name)
+            if await d.is_running():
+                loaded = await d.list_loaded_models()
+                for m in loaded:
+                    hot_models.append((p_name, m))
+
+        if hot_models:
+            console.print("\n[bold cyan]🔥 Active loaded models found in memory:[/bold cyan]")
+            for i, (p_name, m_name) in enumerate(hot_models):
+                console.print(f"  [{i+1}] 🟢 [bold]{m_name}[/bold] [dim]({p_name})[/dim]")
+            other_idx = len(hot_models) + 1
+            console.print(f"  [{other_idx}] ➕ [dim]Choose a different provider / model[/dim]")
+
+            ans = await self.async_prompt_user(f"\nEnter selection (1-{other_idx}, default 1): ")
+            choice = 1
+            if ans.strip():
                 try:
-                    idx = int(ans) - 1
-                    if 0 <= idx < len(models_data):
-                        self.config["model"] = models_data[idx]["id"]
-                        console.print(f"[bold green]Selected: {self.config['model']}[/bold green]\n")
-                        break
-                    else:
-                        console.print("[bold red]Invalid selection.[/bold red]")
+                    choice = int(ans.strip())
                 except ValueError:
-                    console.print("[bold red]Please enter a valid number.[/bold red]")
+                    choice = 1
 
-        except Exception:
-            # Silently fail if the endpoint isn't supported (e.g. OpenAI API)
-            pass
+            if 1 <= choice <= len(hot_models):
+                chosen_p, chosen_m = hot_models[choice - 1]
+                self.switch_provider(chosen_p)
+                self.config["model"] = chosen_m
+                console.print(f"[bold green]Using hot model: {chosen_m} ({chosen_p})[/bold green]\n")
+                return
+
+        # 4. No hot model chosen -> Provider Picker -> Model Picker
+        console.print("\n[bold cyan]Select an API Provider / Router:[/bold cyan]")
+        p_list = list(providers.keys())
+        for i, p_name in enumerate(p_list):
+            d = self.get_driver_for_provider(p_name)
+            is_up = await d.is_running()
+            status_str = "[bold green]ONLINE[/bold green]" if is_up else "[dim red]STOPPED[/dim red]"
+            console.print(f"  [{i+1}] {p_name} ({status_str})")
+
+        while True:
+            ans = await self.async_prompt_user(f"\nEnter provider number (1-{len(p_list)}): ")
+            try:
+                idx = int(ans.strip()) - 1
+                if 0 <= idx < len(p_list):
+                    selected_p = p_list[idx]
+                    self.switch_provider(selected_p)
+                    break
+            except ValueError:
+                pass
+            console.print("[bold red]Invalid selection.[/bold red]")
+
+        await self.ensure_current_server_running()
+        await self._select_model_for_active_provider()
+
+    async def _select_model_for_active_provider(self):
+        """Prompt and load model for current active provider."""
+        if not hasattr(self, 'driver'):
+            return
+
+        loaded = await self.driver.list_loaded_models()
+        available = await self.driver.list_available_models()
+
+        if not available and not loaded:
+            return
+
+        if len(available) == 1:
+            self.config["model"] = available[0]
+            if self.config["model"] not in loaded:
+                await self.driver.load_model(self.config["model"])
+            return
+
+        console.print(f"\n[bold cyan]Select a model for provider '{self.active_provider_name}':[/bold cyan]")
+        for i, m in enumerate(available):
+            icon = "🟢" if m in loaded else "⏸"
+            status_text = " [bold green](LOADED)[/bold green]" if m in loaded else ""
+            console.print(f"  [{i+1}] {icon} {m}{status_text}")
+
+        while True:
+            ans = await self.async_prompt_user(f"\nEnter model number (1-{len(available)}): ")
+            try:
+                idx = int(ans.strip()) - 1
+                if 0 <= idx < len(available):
+                    self.config["model"] = available[idx]
+                    console.print(f"[bold green]Selected: {self.config['model']}[/bold green]\n")
+                    break
+            except ValueError:
+                pass
+            console.print("[bold red]Invalid selection.[/bold red]")
+
+        if self.config.get("model") and self.config["model"] not in loaded:
+            success, msg = await self.driver.load_model(self.config["model"])
+            if not success:
+                console.print(f"[bold red]Error loading model:[/bold red] {msg}")

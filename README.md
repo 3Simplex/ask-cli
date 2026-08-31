@@ -26,21 +26,27 @@ API keys are encrypted using Fernet with a machine-specific key derived from the
 
 ## Quick Start
 
-```bash
 # Agent State Kit, defaults to the "ask" demo agent.
 ask "How do I use this?"
 
 # Unlock tools with -i interactive mode, user-in-the-middle built into 'run' tool.
 ask -i "Help me build a new agent"
 
-# Asign an --agent {by-name}, or -a {name} for short.
+# Assign an --agent {by-name}, or -a {name} for short.
 ask -i --agent linux "Check my logs for errors."
+
+# Switch API provider / router on the fly
+ask -ap freetoken "Explain this repo"
+
+# Inspect and manage API providers & routers
+ask -ap                                # List all configured providers and statuses
+ask -ap llama-cpp -start        # Start router daemon
+ask -ap llama-cpp -load         # List available models to load
+ask -ap llama-cpp -load qwen    # Load specific model into router
+ask -ap freetoken -stop                # Stop running daemon
 
 # Approve tools using --auto with security evaluator permission gate.
 ask --auto -i -a dev -c repo-status-report "Show me the git status and report changes."
-
-
-```
 
 ## Architecture
 

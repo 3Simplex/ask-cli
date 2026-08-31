@@ -1,54 +1,17 @@
 {
-  "research": {
-    "allowed_tools": ["read", "search", "set_state"],
-    "description": "Acquire integral information.",
-    "reasoning_budget": 4096,
-    "system_prompt": "You are in research mode. Structure the knowlege requirements with a rubric then reasearch to gain relevant context.",
-    "temperature": 0.3
-  },
-  "planning": {
-    "allowed_tools": ["read", "search", "set_state"],
-    "description": "Generate a plan to acomplish goals.",
+  "initialization": {
+    "allowed_tools": [ "create_state", "set_state"],
+    "description": "Generate a dynamic state to acomplish goals.",
     "reasoning_budget": 8192,
-    "system_prompt": "You are in planning mode. Outline a step-by-step plan with tasks required for each state mode to achieve well defined goals.",
+    "system_prompt": "You are in dynamic state initialization mode. Outline a step-by-step plan with tasks required for each state to achieve well defined goals.",
     "temperature": 0.5
   },
-  "work": {
-    "allowed_tools": ["run", "read", "set_state"],
-    "description": "Take action to do work.",
-    "context_providers": {
-      "OS_guide": {
-      "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/skills/nix-guide.md",
-      "refresh": "first_turn"}
-    },
-    "reasoning_budget": 4096,
-    "system_prompt": "You are in work mode. Use tools as needed then switch to analyze or test mode to verify your results.\n{OS_guide}\n",
-    "temperature": 0.1
-  },
-  "test": {
-    "allowed_tools": ["run", "read", "set_state"],
-    "description": "Run tests, validate outputs, lint, and verify correctness.",
-    "context_providers": {
-      "OS_guide": {
-      "command": "grep -q \"NixOS\" /etc/os-release && cat ~/src/flakes/ask-cli/assets/skills/nix-guide.md",
-      "refresh": "first_turn"}
-    },
-    "reasoning_budget": 4096,
-    "system_prompt": "You are in test mode. Execute tests, validate outputs, lint code and verify that work is correct. Report any failures clearly.\n{OS_guide}\n",
-    "temperature": 0.1
-  },
-  "analyze": {
-    "allowed_tools": ["read", "search", "set_state"],
-    "description": "Analyze work, results, code, errors, unexpected tool outputs, etc...",
-    "reasoning_budget": 8192,
-    "system_prompt": "You are in analyze mode. Produce a report on the subject which brought you here that can be used to determine what comes next.",
-    "temperature": 0.6
-  },
   "cleanup": {
-    "allowed_tools": ["set_state", "gc"],
-    "description": "Reclaim context space.",
+    "allowed_tools": ["delete_state", "set_state", "gc"],
+    "description": "Cleanup context or dynamic states.",
     "reasoning_budget": 4096,
-    "system_prompt": "Carefully clean your context using the gc tool to reclaim needed space. Keep relevant information.",
-    "temperature": 0.1
+    "system_prompt": "Use the gc tool to reclaim needed context space. Keep relevant information. Use the delete_state tool to remove unwanted dynamic states.",
+    "temperature": 0.1,
+    "evaluators": ["state_guard"]
   }
 }

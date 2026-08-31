@@ -63,8 +63,14 @@ class Agent:
         now = time.time()
         resolved = {}
 
-        # Merge both old 'context_commands' and new 'context_providers'
-        all_providers = {**self._raw_commands, **self._state_commands.get(self.state_name, {})}
+        dynamic_state_cfg = self.dynamic_states.get(self.state_name, {})
+        dynamic_providers = dynamic_state_cfg.get("context_providers", {})
+
+        all_providers = {
+            **self._raw_commands,
+            **self._state_commands.get(self.state_name, {}),
+            **dynamic_providers
+        }
 
         async def resolve_one(key, cfg):
             # Default to 'shell' if not specified for backward compatibility
@@ -166,9 +172,13 @@ class Agent:
         messages = copy.deepcopy(messages)
 
         def _apply_templates(target, ctx_data):
+            class SafeDict(dict):
+                def __missing__(self, key):
+                    return "{" + key + "}"
+            safe = SafeDict(ctx_data)
             if isinstance(target, dict):
                 return {k: (_apply_templates(v, ctx_data) if isinstance(v, (dict, list)) else
-                           str(v).format_map(ctx_data) if isinstance(v, str) else v)
+                            str(v).format_map(safe) if isinstance(v, str) else v)
                         for k, v in target.items()}
             elif isinstance(target, list):
                 return [_apply_templates(i, ctx_data) for i in target]

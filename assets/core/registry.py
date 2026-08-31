@@ -6,6 +6,7 @@ from typing import Any, Literal
 TOOL_REGISTRY = {}
 EVAL_REGISTRY = {}
 HOOK_REGISTRY = {}
+API_REGISTRY = {}
 
 # --- DATA MODELS ---
 @dataclass
@@ -67,4 +68,14 @@ def ask_hook(name: str, description: str = ""):
             "description": description
         }
         return func
+    return decorator
+
+def ask_api(name: str, description: str = ""):
+    """Decorator to register an API/router driver class."""
+    def decorator(cls):
+        API_REGISTRY[name] = {
+            "driver_class": cls,
+            "description": description
+        }
+        return cls
     return decorator

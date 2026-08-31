@@ -7,8 +7,9 @@ context_providers, allowed_tools, system_prompt, and reasoning_budget.
 Example:
   create_state {
     "name": "git-review",
+    "description": "Review git diffs with git help and status context.",
     "allowed_tools": ["run", "read", "set_state"],
-    "system_prompt": "You are reviewing a git diff. Be thorough and critical.",
+    "system_prompt": "You are reviewing a git diff. Be thorough and critical.\n\n{git_help}\n{git_status}",
     "context_providers": {
       "git_help": {
         "command": "git merge --help",
@@ -18,7 +19,8 @@ Example:
         "command": "git status",
         "refresh": "always"
       }
-    }
+    },
+    "evaluators": ["state_guard"]
   }
 """
 import json
@@ -26,15 +28,49 @@ from assets.core.registry import ask_tool
 
 @ask_tool(
     name="create_state",
-    description="Create a dynamic state at runtime with custom context, tools, and prompt. The state persists for the current session.",
+    description="Create a dynamic state at runtime with custom context, tools, and prompt. The state persists for the current session. Use this to create highly specialized modes of operation for specific tasks.",
     schema_properties={
-        "name": {"type": "string", "description": "Name of the new state"},
-        "allowed_tools": {"type": "array", "items": {"type": "string"}, "description": "Tools available in this state"},
-        "system_prompt": {"type": "string", "description": "System prompt for this state"},
-        "context_providers": {"type": "object", "description": "Context providers (shell commands or API calls)"},
-        "reasoning_budget": {"type": "integer", "description": "Reasoning budget in tokens"},
-        "temperature": {"type": "number", "description": "Temperature for this state"},
-        "description": {"type": "string", "description": "Description of what this state is for"}
+        "name": {
+            "type": "string",
+            "description": "Name of the new state, a good name must be concice and descriptive to the purpose of the state."
+        },
+        "allowed_tools": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Must be a subset of your current tools, include set_state to allow state transitions. A well defined state should be customized to the intended use of the chosen tool for a specific task."
+        },
+        "description": {
+            "type": "string",
+            "description": "A brief description of what this state is for, when and why to use it, the intent & scope of the state are defined with this property which will be displayed to you in your state directory along with its name and tools. This is important for an agent while deciding which state to use."
+        },
+        "context_providers": {
+            "type": "object",
+            "description": "Variables injected into this states system_prompt at runtime. Each provider can be:\n"
+                        "- Shell command:\n"
+                        "  {\"command\": \"shell command\", \"refresh\": \"always|<dynamic_state_name>\", \"cache_ttl\": <seconds>}\n"
+                        "- HTTP API:\n"
+                        "  {\"type\": \"api\", \"url\": \"https://...\", \"method\": \"GET\", \"cache_ttl\": <seconds>}\n"
+                        "Refresh policies: 'always' (every turn), '<dynamic_state_name>' (on entry of the state named), Choosing the correct refresh policy and optional ttl depends on the rate that the dynamic context becomes stale.\n"
+                        "Note: All shell commands execute in the agent's current CWD. Use absolute paths or 'cd <dir> &&' for other locations as needed.\n"
+                        "This feature is usefull to provide grounding context, such as --help for a particular command, or any relevant information required only while in this state, etc..."
+        },
+#        "evaluators": {
+#            "type": "array",
+#            "items": {"type": "string"},
+#            "description": "(Optional) List of evaluators. Commented out untill evaluators are better suited for dynamic states."
+#        },
+        "reasoning_budget": {
+            "type": "integer",
+            "description": "Reasoning budget in tokens, should be determined based on complexity of the expected output of the state (e.g., 4096 or 8192)."
+        },
+        "temperature": {
+            "type": "number",
+            "description": "LLM Temperature for this state ranging from 0.1 for determinatively strict, up to 0.9 for unpredictably creative."
+        },
+        "system_prompt": {
+            "type": "string",
+            "description": "The exact system prompt for this state seasoned by each of its schema_properties. Each of the context_providers MUST be injected here using {variable_name} syntax. The purpose of a well made state is to provide perfect context with instruction to enable the llm with grounding for a task without. Avoid suggesting redundant effort which is given through any context_providers refferenced here."
+        }
     }
 )
 async def create_state_handler(ctx, agent, args, internal_msgs=None):
@@ -62,6 +98,7 @@ async def create_state_handler(ctx, agent, args, internal_msgs=None):
         "allowed_tools": args.get("allowed_tools", []),
         "system_prompt": args.get("system_prompt", ""),
         "context_providers": args.get("context_providers", {}),
+        #"evaluators": args.get("evaluators", []),
         "reasoning_budget": args.get("reasoning_budget", 4096),
         "temperature": args.get("temperature", 0.1),
         "description": args.get("description", ""),
@@ -70,13 +107,9 @@ async def create_state_handler(ctx, agent, args, internal_msgs=None):
     # Store it
     agent.dynamic_states[name] = state_config
 
-    # Also add to the session persistence
-    if internal_msgs:
-        # We'll persist via the session file in ask.py
-        pass
-
     return (
         f"SUCCESS: Created dynamic state '{name}'.\n"
         f"  Tools: {state_config['allowed_tools']}\n"
+        #f"  Evaluators: {state_config['evaluators']}\n"
         f"  Description: {state_config['description']}"
     )
