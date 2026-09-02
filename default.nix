@@ -19,6 +19,8 @@ pkgs.stdenv.mkDerivation {
     cp ask.py $out/bin/ask
     cp oobe.py $out/bin/oobe
     cp -r assets $out/share/ask/
+    cp AGENTS.md $out/share/ask/
+    cp -r docs $out/share/ask/
     chmod +x $out/bin/ask
     chmod +x $out/bin/oobe
 

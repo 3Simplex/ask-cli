@@ -57,7 +57,7 @@ ask-cli/
 ├── assets/
 │   ├── agent.py                  # Core Agent class (state machine + context resolution)
 │   ├── context.py                # Runtime context, security watcher, rate limiting
-│   ├── registry.py               # Tool registration system (@ask_tool decorator)
+│   ├── core/registry.py               # Tool registration system (@ask_tool decorator)
 │   ├── agents/                   # Agent profiles (JSON)
 │   │   ├── ask.json              # Agent State Kit (demo agent) ← default
 │   │   ├── linux.json            # Linux CLI assistant
@@ -84,4 +84,6 @@ ask-cli/
 
 ## See Also
 
-- **Developer Guide** — Detailed for building custom agents, states, and tools etc...
+- **`AGENTS.md`** — instructions for coding agents working on this repo.
+- **`docs/`** — per-feature documentation; start at `docs/index.md`.
+- **Developer Guide** — `assets/docs/developer-guide.md` (still authoritative, migrating into `docs/`).
