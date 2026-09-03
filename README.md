@@ -86,4 +86,4 @@ ask-cli/
 
 - **`AGENTS.md`** — instructions for coding agents working on this repo.
 - **`docs/`** — per-feature documentation; start at `docs/index.md`.
-- **Developer Guide** — `assets/docs/developer-guide.md` (still authoritative, migrating into `docs/`).
+- **Developer Guide** — retired to a redirect; all content now lives in `docs/`.

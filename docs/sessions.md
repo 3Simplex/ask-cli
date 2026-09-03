@@ -4,6 +4,14 @@ related: ["states.md", "config.md"]
 ---
 # Sessions
 
-Session persistence under ~/.local/share/ask/threads/*.json and `-c LAST` / `-c <name>` resume.
+Sessions are saved to `~/.local/share/ask/threads/*.json`:
 
-> Content migrates from `developer-guide.md` §"Session Persistence".
+```json
+{
+  "state": "current_state",
+  "model": "selected_model_id",
+  "messages": [...]
+}
+```
+
+Resume a session with `ask -c LAST` or `ask -c <session_name>`.

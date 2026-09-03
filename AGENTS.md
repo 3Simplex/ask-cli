@@ -35,8 +35,6 @@ table: `docs/index.md`.
 | `config.json` keys | `docs/config.md` |
 | Nix packaging | `docs/nix.md` |
 
-> Migration note: `assets/docs/developer-guide.md` is still authoritative until
-> its content moves into `docs/`.
 
 ## Security posture
 

@@ -3,10 +3,6 @@
 Routing table for `ask-cli` documentation. **Read the one file that matches your
 task — do not read all of them.** Entry point for coding agents is root `AGENTS.md`.
 
-> **Migration status:** `assets/docs/developer-guide.md` is **STILL LIVE** and
-> authoritative pending content migration into these files. Nothing here is
-> reachable-but-empty: each stub names the section it will absorb. Do not delete
-> the developer guide until its content has moved.
 
 | Task / question | Read |
 | --- | --- |
