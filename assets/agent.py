@@ -81,7 +81,7 @@ class Agent:
             # 1. Check cache
             if key in self._context_cache:
                 cached = self._context_cache[key]
-                if ttl == 0 or now - cached["expires"] < ttl:
+                if ttl > 0 and now - cached["expires"] < ttl:
                     return key, cached["result"]
 
             # 2. Check policy
@@ -121,9 +121,10 @@ class Agent:
         """Prepend message IDs inline to each message's content when gc is available.
         This gives the agent direct, unambiguous references to messages by ID.
         """
-        if self.state_name not in self.states:
+        all_states = {**self.states, **self.dynamic_states}
+        if self.state_name not in all_states:
             return messages
-        state_cfg = self.states[self.state_name]
+        state_cfg = all_states[self.state_name]
         if "gc" not in state_cfg.get("allowed_tools", []):
             return messages
 

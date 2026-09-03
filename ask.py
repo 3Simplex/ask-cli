@@ -10,6 +10,7 @@ from rich.markdown import Markdown
 
 # Initialize Architecture
 from assets.context import AskContext
+from assets.core import defaults
 from assets.agent import Agent
 from assets.core.registry import TOOL_REGISTRY, EVAL_REGISTRY, API_REGISTRY
 
@@ -125,6 +126,203 @@ def _load_raw_config():
             pass
     return {}
 
+async def _ap_start(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -start`."""
+    console.print(f"[cyan]Starting daemon for '{p_name}'...[/cyan]")
+    ok, msg = await driver.start_daemon()
+    console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+    return True
+
+async def _ap_stop(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -stop`."""
+    console.print(f"[cyan]Stopping daemon for '{p_name}'...[/cyan]")
+    ok, msg = await driver.stop_daemon()
+    console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+    return True
+
+async def _ap_load(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -load`."""
+    target_model = sub_args[1] if len(sub_args) > 1 and not sub_args[1].startswith("-") else None
+    if not await driver.is_running():
+        console.print(f"[bold yellow]Provider '{p_name}' is currently STOPPED.[/bold yellow]")
+        console.print(f"Start it with: ask -ap {p_name} -start")
+        return True
+
+    avail = await driver.list_available_models()
+    if not target_model:
+        console.print(f"\n[bold cyan]Available live models on '{p_name}':[/bold cyan]")
+        if avail:
+            for idx, m in enumerate(avail):
+                console.print(f"  [{idx + 1}] {m}")
+            console.print(f"\n[dim]Load by number or name:[/dim] ask -ap {p_name} -load <# or name>")
+        else:
+            console.print("  (No models currently reported by the live router)")
+        return True
+    else:
+        # Resolve numeric selection
+        if target_model.isdigit() and avail:
+            idx = int(target_model) - 1
+            if 0 <= idx < len(avail):
+                target_model = avail[idx]
+
+        console.print(f"[cyan]Loading '{target_model}' on '{p_name}'...[/cyan]")
+        ok, msg = await driver.load_model(target_model)
+        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+        return True
+
+async def _ap_unload(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -unload`."""
+    target_model = sub_args[1] if len(sub_args) > 1 and not sub_args[1].startswith("-") else None
+    if not await driver.is_running():
+        console.print(f"[bold yellow]Provider '{p_name}' is currently STOPPED.[/bold yellow]")
+        return True
+
+    loaded = await driver.list_loaded_models()
+    if not target_model:
+        console.print(f"\n[bold cyan]Loaded running models on '{p_name}':[/bold cyan]")
+        if loaded:
+            for idx, m in enumerate(loaded):
+                console.print(f"  [{idx + 1}] {m}")
+            console.print(f"\n[dim]Unload by number or name:[/dim] ask -ap {p_name} -unload <# or name>")
+        else:
+            console.print("  (No models currently loaded in memory)")
+        return True
+    else:
+        # Resolve numeric selection
+        if target_model.isdigit() and loaded:
+            idx = int(target_model) - 1
+            if 0 <= idx < len(loaded):
+                target_model = loaded[idx]
+
+        console.print(f"[cyan]Unloading '{target_model}' from '{p_name}'...[/cyan]")
+        ok, msg = await driver.unload_model(target_model)
+        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+        return True
+
+async def _ap_info(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -info`."""
+    target_model = sub_args[1] if len(sub_args) > 1 and not sub_args[1].startswith("-") else ""
+    avail = await driver.list_available_models()
+    if target_model.isdigit() and avail:
+        idx = int(target_model) - 1
+        if 0 <= idx < len(avail):
+            target_model = avail[idx]
+
+    info = await driver.get_model_info(target_model)
+    console.print(f"\n[bold cyan]📊 Provider / Model Info: {p_name}[/bold cyan]")
+    if "global_preset" in info and info["global_preset"]:
+        console.print(f"[dim]Global Defaults [*]:[/dim] {info['global_preset']}")
+
+    models_info = info.get("models", {})
+    if not models_info:
+        console.print(f"  [dim]No live model telemetry available. (Daemon: {'ONLINE' if info.get('is_running') else 'STOPPED'})[/dim]")
+    for m, mdata in models_info.items():
+        status_str = "[bold green]🟢 LOADED[/bold green]" if mdata.get("loaded") else "[dim]⏸ UNLOADED[/dim]"
+        console.print(f"\n• [bold]{m}[/bold] ({status_str})")
+        if "n_ctx" in mdata:
+            console.print(f"  - Allocated Context: [bold cyan]{mdata['n_ctx']:,}[/bold cyan] tokens (n_ctx)")
+        if "n_ctx_train" in mdata:
+            console.print(f"  - Native Max Context: [dim]{mdata['n_ctx_train']:,}[/dim] tokens (n_ctx_train)")
+        if "params" in mdata and mdata["params"]:
+            p_items = [f"{k}={v}" for k, v in list(mdata["params"].items())[:6]]
+            console.print(f"  - Parameters: [dim]{', '.join(p_items)}[/dim]")
+        if "preset" in mdata and mdata["preset"]:
+            console.print(f"  - Saved Preset: [yellow]{mdata['preset']}[/yellow]")
+    return True
+
+async def _ap_reload(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -reload`."""
+    console.print(f"[cyan]Reloading router presets for '{p_name}'...[/cyan]")
+    ok, msg = await driver.reload_router()
+    console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+    return True
+
+async def _ap_presets(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -presets`."""
+    presets = await driver.list_presets()
+    console.print(f"\n[bold cyan]📋 Reusable Presets for '{p_name}':[/bold cyan]")
+    if not presets:
+        console.print("  (No templates saved. Save one with: ask -ap <p> -save <name> <k=v ...>)")
+    for name, p_data in presets.items():
+        console.print(f"  • [bold]@{name}[/bold] → [dim]{p_data}[/dim]")
+    return True
+
+async def _ap_save(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -save`."""
+    if len(sub_args) < 3:
+        console.print("[bold red]Usage:[/bold red] ask -ap <provider> -save <template_name> <key=value ...>")
+        return True
+    tpl_name = sub_args[1].removeprefix("@")
+    pairs = {p.split("=")[0]: p.split("=")[1] for p in sub_args[2:] if "=" in p}
+    ok, msg = await driver.save_preset(tpl_name, pairs)
+    console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+    return True
+
+async def _ap_set(p_name, driver, sub_args, console):
+    """Handles `ask -ap <provider> -set`."""
+    if len(sub_args) < 2:
+        console.print("[bold red]Usage:[/bold red] ask -ap <provider> -set [model] <key=value ... or @template>")
+        return True
+
+    first_arg = sub_args[1]
+    avail = await driver.list_available_models()
+
+    if "=" in first_arg or first_arg.startswith("@"):
+        target_model = "*"
+        raw_pairs = sub_args[1:]
+    else:
+        target_model = first_arg
+        if target_model.isdigit() and avail:
+            idx = int(target_model) - 1
+            if 0 <= idx < len(avail):
+                target_model = avail[idx]
+        raw_pairs = sub_args[2:]
+
+    settings = {}
+    for p in raw_pairs:
+        if "=" in p:
+            k, v = p.split("=", 1)
+            settings[k] = v
+        elif p.startswith("@"):
+            settings["@"] = p.removeprefix("@")
+
+    if not settings:
+        console.print("[bold red]Error: No key=value settings or @template provided.[/bold red]")
+        return True
+
+    console.print(f"[cyan]Applying preset for '{target_model}' on '{p_name}'...[/cyan]")
+    ok, msg = await driver.set_model_config(target_model, settings)
+    console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
+    return True
+
+# Single source of truth for BOTH -ap dispatch and the printed help text.
+# Keyed by short flag; insertion order defines help output order.
+AP_DISPATCH = {
+    "-start": (_ap_start, 'ask -ap <provider> -start               Start router daemon'),
+    "-stop": (_ap_stop, 'ask -ap <provider> -stop                Stop router daemon'),
+    "-load": (_ap_load, 'ask -ap <provider> -load [model]        List or load available model'),
+    "-unload": (_ap_unload, 'ask -ap <provider> -unload [model]      List or unload running model'),
+    "-info": (_ap_info, 'ask -ap <provider> -info [model]        Inspect model configuration & context'),
+    "-set": (_ap_set, 'ask -ap <provider> -set <model> <k=v>   Set model preset & hot-reload in memory'),
+    "-reload": (_ap_reload, 'ask -ap <provider> -reload              Trigger hot-reload of presets'),
+    "-presets": (_ap_presets, 'ask -ap <provider> -presets             List saved preset templates'),
+    "-save": (_ap_save, 'ask -ap <provider> -save <name> <k=v>   Save reusable preset template'),
+}
+
+# `--long` twins resolve to the same handler without affecting help order.
+AP_LOOKUP = {
+    **AP_DISPATCH,
+    "--start": AP_DISPATCH["-start"],
+    "--stop": AP_DISPATCH["-stop"],
+    "--load": AP_DISPATCH["-load"],
+    "--unload": AP_DISPATCH["-unload"],
+    "--info": AP_DISPATCH["-info"],
+    "--reload": AP_DISPATCH["-reload"],
+    "--presets": AP_DISPATCH["-presets"],
+    "--save": AP_DISPATCH["-save"],
+    "--set": AP_DISPATCH["-set"],
+}
+
 async def _handle_provider_lazy_ops(argv):
     """Handles:
       ask -ap / ask --api-provider
@@ -207,15 +405,8 @@ async def _handle_provider_lazy_ops(argv):
                     console.print(f"    [dim]Loaded Models:[/dim] {', '.join(loaded)}")
 
         console.print("\n[dim]Provider Options:[/dim]")
-        console.print("  ask -ap <provider> -start               Start router daemon")
-        console.print("  ask -ap <provider> -stop                Stop router daemon")
-        console.print("  ask -ap <provider> -load [model]        List or load available model")
-        console.print("  ask -ap <provider> -unload [model]      List or unload running model")
-        console.print("  ask -ap <provider> -info [model]        Inspect model configuration & context")
-        console.print("  ask -ap <provider> -set <model> <k=v>   Set model preset & hot-reload in memory")
-        console.print("  ask -ap <provider> -reload              Trigger hot-reload of presets")
-        console.print("  ask -ap <provider> -presets             List saved preset templates")
-        console.print("  ask -ap <provider> -save <name> <k=v>   Save reusable preset template")
+        for _flag, (_h, usage) in AP_DISPATCH.items():
+            console.print(f"  {usage}")
         console.print("  ask -ap <provider> \"Your query\"         Run agent using provider")
         return True
 
@@ -247,167 +438,11 @@ async def _handle_provider_lazy_ops(argv):
         return True
 
     cmd = sub_args[0]
-    if cmd in ("-start", "--start"):
-        console.print(f"[cyan]Starting daemon for '{p_name}'...[/cyan]")
-        ok, msg = await driver.start_daemon()
-        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-        return True
-
-    elif cmd in ("-stop", "--stop"):
-        console.print(f"[cyan]Stopping daemon for '{p_name}'...[/cyan]")
-        ok, msg = await driver.stop_daemon()
-        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-        return True
-
-    elif cmd in ("-load", "--load"):
-        target_model = sub_args[1] if len(sub_args) > 1 and not sub_args[1].startswith("-") else None
-        if not await driver.is_running():
-            console.print(f"[bold yellow]Provider '{p_name}' is currently STOPPED.[/bold yellow]")
-            console.print(f"Start it with: ask -ap {p_name} -start")
-            return True
-
-        avail = await driver.list_available_models()
-        if not target_model:
-            console.print(f"\n[bold cyan]Available live models on '{p_name}':[/bold cyan]")
-            if avail:
-                for idx, m in enumerate(avail):
-                    console.print(f"  [{idx + 1}] {m}")
-                console.print(f"\n[dim]Load by number or name:[/dim] ask -ap {p_name} -load <# or name>")
-            else:
-                console.print("  (No models currently reported by the live router)")
-            return True
-        else:
-            # Resolve numeric selection
-            if target_model.isdigit() and avail:
-                idx = int(target_model) - 1
-                if 0 <= idx < len(avail):
-                    target_model = avail[idx]
-
-            console.print(f"[cyan]Loading '{target_model}' on '{p_name}'...[/cyan]")
-            ok, msg = await driver.load_model(target_model)
-            console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-            return True
-
-    elif cmd in ("-unload", "--unload"):
-        target_model = sub_args[1] if len(sub_args) > 1 and not sub_args[1].startswith("-") else None
-        if not await driver.is_running():
-            console.print(f"[bold yellow]Provider '{p_name}' is currently STOPPED.[/bold yellow]")
-            return True
-
-        loaded = await driver.list_loaded_models()
-        if not target_model:
-            console.print(f"\n[bold cyan]Loaded running models on '{p_name}':[/bold cyan]")
-            if loaded:
-                for idx, m in enumerate(loaded):
-                    console.print(f"  [{idx + 1}] {m}")
-                console.print(f"\n[dim]Unload by number or name:[/dim] ask -ap {p_name} -unload <# or name>")
-            else:
-                console.print("  (No models currently loaded in memory)")
-            return True
-        else:
-            # Resolve numeric selection
-            if target_model.isdigit() and loaded:
-                idx = int(target_model) - 1
-                if 0 <= idx < len(loaded):
-                    target_model = loaded[idx]
-
-            console.print(f"[cyan]Unloading '{target_model}' from '{p_name}'...[/cyan]")
-            ok, msg = await driver.unload_model(target_model)
-            console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-            return True
-
-    elif cmd in ("-info", "--info"):
-        target_model = sub_args[1] if len(sub_args) > 1 and not sub_args[1].startswith("-") else ""
-        avail = await driver.list_available_models()
-        if target_model.isdigit() and avail:
-            idx = int(target_model) - 1
-            if 0 <= idx < len(avail):
-                target_model = avail[idx]
-
-        info = await driver.get_model_info(target_model)
-        console.print(f"\n[bold cyan]📊 Provider / Model Info: {p_name}[/bold cyan]")
-        if "global_preset" in info and info["global_preset"]:
-            console.print(f"[dim]Global Defaults [*]:[/dim] {info['global_preset']}")
-
-        models_info = info.get("models", {})
-        if not models_info:
-            console.print(f"  [dim]No live model telemetry available. (Daemon: {'ONLINE' if info.get('is_running') else 'STOPPED'})[/dim]")
-        for m, mdata in models_info.items():
-            status_str = "[bold green]🟢 LOADED[/bold green]" if mdata.get("loaded") else "[dim]⏸ UNLOADED[/dim]"
-            console.print(f"\n• [bold]{m}[/bold] ({status_str})")
-            if "n_ctx" in mdata:
-                console.print(f"  - Allocated Context: [bold cyan]{mdata['n_ctx']:,}[/bold cyan] tokens (n_ctx)")
-            if "n_ctx_train" in mdata:
-                console.print(f"  - Native Max Context: [dim]{mdata['n_ctx_train']:,}[/dim] tokens (n_ctx_train)")
-            if "params" in mdata and mdata["params"]:
-                p_items = [f"{k}={v}" for k, v in list(mdata["params"].items())[:6]]
-                console.print(f"  - Parameters: [dim]{', '.join(p_items)}[/dim]")
-            if "preset" in mdata and mdata["preset"]:
-                console.print(f"  - Saved Preset: [yellow]{mdata['preset']}[/yellow]")
-        return True
-
-    elif cmd in ("-reload", "--reload"):
-        console.print(f"[cyan]Reloading router presets for '{p_name}'...[/cyan]")
-        ok, msg = await driver.reload_router()
-        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-        return True
-
-    elif cmd in ("-presets", "--presets"):
-        presets = await driver.list_presets()
-        console.print(f"\n[bold cyan]📋 Reusable Presets for '{p_name}':[/bold cyan]")
-        if not presets:
-            console.print("  (No templates saved. Save one with: ask -ap <p> -save <name> <k=v ...>)")
-        for name, p_data in presets.items():
-            console.print(f"  • [bold]@{name}[/bold] → [dim]{p_data}[/dim]")
-        return True
-
-    elif cmd in ("-save", "--save"):
-        if len(sub_args) < 3:
-            console.print("[bold red]Usage:[/bold red] ask -ap <provider> -save <template_name> <key=value ...>")
-            return True
-        tpl_name = sub_args[1].removeprefix("@")
-        pairs = {p.split("=")[0]: p.split("=")[1] for p in sub_args[2:] if "=" in p}
-        ok, msg = await driver.save_preset(tpl_name, pairs)
-        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-        return True
-
-    elif cmd in ("-set", "--set"):
-        if len(sub_args) < 2:
-            console.print("[bold red]Usage:[/bold red] ask -ap <provider> -set [model] <key=value ... or @template>")
-            return True
-
-        first_arg = sub_args[1]
-        avail = await driver.list_available_models()
-
-        if "=" in first_arg or first_arg.startswith("@"):
-            target_model = "*"
-            raw_pairs = sub_args[1:]
-        else:
-            target_model = first_arg
-            if target_model.isdigit() and avail:
-                idx = int(target_model) - 1
-                if 0 <= idx < len(avail):
-                    target_model = avail[idx]
-            raw_pairs = sub_args[2:]
-
-        settings = {}
-        for p in raw_pairs:
-            if "=" in p:
-                k, v = p.split("=", 1)
-                settings[k] = v
-            elif p.startswith("@"):
-                settings["@"] = p.removeprefix("@")
-
-        if not settings:
-            console.print("[bold red]Error: No key=value settings or @template provided.[/bold red]")
-            return True
-
-        console.print(f"[cyan]Applying preset for '{target_model}' on '{p_name}'...[/cyan]")
-        ok, msg = await driver.set_model_config(target_model, settings)
-        console.print(f"[{'bold green' if ok else 'bold red'}]{msg}[/]")
-        return True
-
-    return False
+    entry = AP_LOOKUP.get(cmd)
+    if entry is None:
+        return False
+    handler, _usage = entry
+    return await handler(p_name, driver, sub_args, console)
 
 def _lazy_arg_check(argv):
     """Intercept flags missing their values to restore old "lazy arg" behavior."""
@@ -557,17 +592,16 @@ async def main():
             with open(latest_file, 'r') as f:
                 loaded = json.load(f)
                 if isinstance(loaded, dict):
+                    # Restore the provider used in this session
+                    if "provider" in loaded and loaded["provider"]:
+                        ctx.switch_provider(loaded["provider"])
                     if "state" in loaded:
-                        # Restore dynamic states from session
                         if "dynamic_states" in loaded:
                             agent.dynamic_states = loaded["dynamic_states"]
-                        # Prevent agents from inheriting invalid states from cross-loaded sessions
                         if loaded["state"] in agent.states or loaded["state"] in agent.dynamic_states or loaded["state"] == "none":
                             agent.state_name = loaded["state"]
                         else:
-                            console.print(f"[bold yellow]Warning: State '{loaded['state']}' is invalid for agent '{agent.name}'. Resetting state.[/bold yellow]")
                             agent.state_name = "none"
-                    # Load the saved model for this session
                     if "model" in loaded:
                         ctx.config["model"] = loaded["model"]
                     if "tokens" in loaded:
@@ -624,7 +658,7 @@ async def main():
 
     with open(latest_file, 'w') as f:
         # Save the model to the thread state
-        json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.dynamic_states}, f)
+        json.dump({ "provider": ctx.active_provider_name, "model": ctx.config.get("model"), "state": agent.state_name, "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.dynamic_states }, f)
 
     turn_count = 0
 
@@ -632,7 +666,7 @@ async def main():
         turn_count += 1
 
         # --- RESTORE MAX TURNS PROMPT ---
-        if turn_count > ctx.config.get("max_turns", 10):
+        if turn_count > defaults.get(ctx.config, "max_turns"):
             console.print("[bold yellow]Warning: Maximum autonomous loops reached.[/bold yellow]")
             ans = await ctx.async_prompt_user("Continue anyway? (y/n): ")
             if ans.lower() == 'y':
@@ -662,9 +696,9 @@ async def main():
             while retry_count < max_retries:
                 try:
                     r = await asyncio.to_thread(
-                        requests.post, f"{ctx.config['api_base']}/chat/completions",
-                        headers={"Authorization": f"Bearer {ctx.config['api_key']}"},
-                        json=payload, timeout=ctx.config['timeout']
+                        requests.post, f"{defaults.get(ctx.config, 'api_base')}/chat/completions",
+                        headers={"Authorization": f"Bearer {defaults.get(ctx.config, 'api_key')}"},
+                        json=payload, timeout=defaults.get(ctx.config, "timeout")
                     )
 
                     # If model is still loading weights into VRAM, wait and retry
@@ -735,8 +769,9 @@ async def main():
                     res = f"Tool Execution Error: {str(e)}"
                 return {"role": "tool", "tool_call_id": tc['id'], "name": name, "content": str(res)}
 
-            tasks = [run_tool(tc) for tc in response_msg["tool_calls"]]
-            results = await asyncio.gather(*tasks)
+            results = []
+            for tc in response_msg["tool_calls"]:
+                results.append(await run_tool(tc))
             internal_msgs.extend(results)
 
             # Filter out gc'd messages so they never appear again
@@ -744,14 +779,14 @@ async def main():
 
             # Persist state alongside messages
             with open(latest_file, 'w') as f:
-                json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.dynamic_states}, f)
+                json.dump({ "provider": ctx.active_provider_name, "model": ctx.config.get("model"), "state": agent.state_name, "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.dynamic_states }, f)
 
             console.print("[bold green]✅ Tools completed.[/bold green]\n")
             continue
 
         # 4. IF NO TOOLS, SAVE FINAL STATE AND BREAK
         with open(latest_file, 'w') as f:
-            json.dump({"state": agent.state_name, "model": ctx.config.get("model"), "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.dynamic_states}, f)
+            json.dump({ "provider": ctx.active_provider_name, "model": ctx.config.get("model"), "state": agent.state_name, "tokens": ctx.current_tokens, "messages": internal_msgs, "dynamic_states": agent.dynamic_states }, f)
         break
 
 if __name__ == "__main__":

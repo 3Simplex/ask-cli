@@ -5,6 +5,7 @@ import asyncio
 import time
 import requests
 from datetime import datetime
+from assets.core import defaults
 from pathlib import Path
 from rich.console import Console
 
@@ -23,6 +24,9 @@ class SearchRateLimiter:
         async with self._lock:
             now = time.time()
             self._timestamps = [t for t in self._timestamps if now - t < 60]
+            # Wait if we've hit the concurrent limit
+            while self._active >= self.max_concurrent:
+                await asyncio.sleep(0.1)
             if len(self._timestamps) >= self.max_per_minute:
                 oldest = self._timestamps[0]
                 wait = 60 - (now - oldest) + self.delay
@@ -34,6 +38,7 @@ class SearchRateLimiter:
                     console.print(f"[dim]Waiting {wait:.1f}s between searches...[/dim]")
             self._timestamps.append(time.time())
             self._active += 1
+        # Now release the lock before sleeping, so other tasks can queue
         if len(self._timestamps) >= self.max_per_minute:
             oldest = self._timestamps[0]
             wait = 60 - (time.time() - oldest) + self.delay
@@ -63,22 +68,29 @@ class AskContext:
         with open(config_path) as f:
             self.config = json.load(f)
 
-        self.current_tokens = 0
-        self.max_tokens = 8192  # Default fallback
-        self.active_routine = None
+        # ── directories and locks ──
+        self.threads_dir = self.data_dir / "threads"
+        self.threads_dir.mkdir(parents=True, exist_ok=True)
+        self.audit_dir = self.data_dir / "security_audit"
+        self.audit_dir.mkdir(parents=True, exist_ok=True)
 
-        # Override config with CLI flags if provided
-        if args:
-            if getattr(args, 'auto', False):
-                self.config['auto_approve_default'] = True
-            if getattr(args, 'sandbox', False):
-                self.config['use_sandbox_default'] = True
-            if getattr(args, 'routine', None):
-                self.active_routine = args.routine
+        self.ui_lock = asyncio.Lock()
+        self.watcher_lock = asyncio.Lock()
+
+        self.search_limiter = SearchRateLimiter(
+            max_per_minute=defaults.get(self.config, "search_rate_limit"),
+            delay=defaults.get(self.config, "search_rate_delay"),
+            max_concurrent=defaults.get(self.config, "search_max_concurrent"),
+        )
+
+        # These are set twice in the original—it's harmless, but keep one:
+        self.current_tokens = 0
+        self.max_tokens = 8192
+        self.active_routine = None
 
         # Initialize active provider dynamically
         req_provider = getattr(args, 'api_provider', None) if args else None
-        initial_provider = req_provider or self.config.get("active_provider")
+        initial_provider = req_provider or defaults.get(self.config, "active_provider")
         self.switch_provider(initial_provider)
 
         # Override config with CLI flags if provided
@@ -89,24 +101,6 @@ class AskContext:
                 self.config['use_sandbox_default'] = True
             if getattr(args, 'routine', None):
                 self.active_routine = args.routine
-
-        self.data_dir = Path(os.path.expanduser("~/.local/share/ask"))
-        self.threads_dir = self.data_dir / "threads"
-        self.threads_dir.mkdir(parents=True, exist_ok=True)
-        self.audit_dir = self.data_dir / "security_audit"
-        self.audit_dir.mkdir(parents=True, exist_ok=True)
-
-        self.ui_lock = asyncio.Lock()
-        self.watcher_lock = asyncio.Lock()
-
-        self.search_limiter = SearchRateLimiter(
-            max_per_minute=self.config.get('search_rate_limit', 5),
-            delay=self.config.get('search_rate_delay', 2.0),
-            max_concurrent=self.config.get('search_max_concurrent', 1),
-        )
-
-        self.current_tokens = 0
-        self.max_tokens = 8192  # Default fallback
 
     def get_token_budget(self, max_tokens: int = None) -> int:
         """Calculate roughly how many tokens are remaining in the context window.
@@ -182,7 +176,7 @@ class AskContext:
             provider = providers[provider_name]
             self.config["api_base"] = provider.get("api_base")
             self.config["driver"] = provider.get("driver") or (
-                "llama-cpp-router" if "llama" in provider_name or provider.get("type") == "router" else "openai-compatible"
+                "llama-cpp" if "llama" in provider_name or provider.get("type") == "router" else "openai-compatible"
             )
             if provider.get("default_model"):
                 self.config.setdefault("model", provider.get("default_model"))
@@ -223,7 +217,7 @@ class AskContext:
         providers = self.config.get("providers", {})
         pcfg = {**providers.get(provider_name, {}), "provider_name": provider_name}
         driver_type = pcfg.get("driver") or (
-            "llama-cpp-router" if "llama" in provider_name or pcfg.get("type") == "router" else "openai-compatible"
+            "llama-cpp" if "llama" in provider_name or pcfg.get("type") == "router" else "openai-compatible"
         )
         return get_api_driver(driver_type, pcfg, ctx=self)
 
@@ -250,13 +244,24 @@ class AskContext:
             console.print(f"[dim yellow]Notice: {msg}[/dim yellow]")
 
     async def resolve_provider_and_model(self, has_explicit_provider: bool = False):
-        """Unified interactive provider and model selection."""
         providers = self.config.get("providers", {})
         if not providers:
             return
 
         # 1. If model is already set (e.g. resumed thread session)
         if self.config.get("model"):
+            model_target = self.config["model"]
+            # Verify if active provider owns this model; if not, find the right provider
+            curr_driver = getattr(self, 'driver', None)
+            curr_avail = (await curr_driver.list_available_models()) if curr_driver and await curr_driver.is_running() else []
+
+            if model_target not in curr_avail:
+                for p_name in providers:
+                    d = self.get_driver_for_provider(p_name)
+                    if await d.is_running() and model_target in (await d.list_available_models()):
+                        self.switch_provider(p_name)
+                        break
+
             await self.ensure_current_server_running()
             if hasattr(self, 'driver') and await self.driver.is_running():
                 loaded = await self.driver.list_loaded_models()
@@ -299,6 +304,12 @@ class AskContext:
                 self.switch_provider(chosen_p)
                 self.config["model"] = chosen_m
                 console.print(f"[bold green]Using hot model: {chosen_m} ({chosen_p})[/bold green]\n")
+
+                # Verify the engine is actively answering; start it if not ready
+                if hasattr(self, 'driver') and await self.driver.is_running():
+                    loaded = await self.driver.list_loaded_models()
+                    if chosen_m not in loaded:
+                        await self.driver.load_model(chosen_m)
                 return
 
         # 4. No hot model chosen -> Provider Picker -> Model Picker

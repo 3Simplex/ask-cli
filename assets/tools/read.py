@@ -44,10 +44,11 @@ async def read_handler(ctx, agent, args, internal_msgs=None):
     max_chars = max(500, int(budget * 3.5))
 
     if len(content) > max_chars:
-        console.print(f"[bold yellow]Warning: Read output truncated to {max_chars} chars to fit context budget.[/bold yellow]")
-        ans = await ctx.async_prompt_user("Continue with truncated output? (y/n): ")
-        if ans.lower() != 'y':
-            return "User aborted due to truncation."
-        return content[:max_chars] + "\n[TRUNCATED: LOW CONTEXT BUDGET]"
+        async with ctx.ui_lock:
+            console.print(f"[bold yellow]Warning: Read output truncated to {max_chars} chars to fit context budget.[/bold yellow]")
+            ans = await ctx.async_prompt_user("Continue with truncated output? (y/n): ")
+            if ans.lower() != 'y':
+                return "User aborted due to truncation."
+            return content[:max_chars] + "\n[TRUNCATED: LOW CONTEXT BUDGET]"
 
     return content

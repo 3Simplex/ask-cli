@@ -4,6 +4,7 @@ import os, json, sys
 import requests
 from pathlib import Path
 from rich.console import Console
+from assets.core import defaults
 
 try:
     from cryptography.fernet import Fernet
@@ -52,7 +53,7 @@ def setup() -> None:
     console.print("\n[bold cyan]ask-cli: Provider & Router Setup Wizard[/bold cyan]")
 
     providers = existing_config.get("providers", {})
-    active_provider = existing_config.get("active_provider", "")
+    active_provider = defaults.get(existing_config, "active_provider")
 
     # Auto-migrate legacy provider structures
     for p_name, p_data in providers.items():
@@ -115,7 +116,6 @@ def setup() -> None:
         pname = input("Provider name (default 'llama-cpp'): ").strip() or "llama-cpp"
         api_base = input("API Base (default http://localhost:9931/v1): ").strip() or "http://localhost:9931/v1"
         models_dir = input("Path to models directory (e.g. ~/models): ").strip() or "~/models"
-        server_path不易 = input("Path to llama-server binary (default 'llama-server'): ").strip() or "llama-server"
         server_path = input("Path to llama-server binary (default 'llama-server'): ").strip() or "llama-server"
 
         providers[pname] = {
@@ -174,17 +174,17 @@ def setup() -> None:
     config = {
         "providers": providers,
         "active_provider": active_provider or list(providers.keys())[0],
-        "timeout": existing_config.get("timeout", 120000),
-        "max_turns": existing_config.get("max_turns", 100),
-        "max_result_chars": 10000,
-        "auto_approve_default": False,
-        "use_sandbox_default": False,
-        "search_rate_limit": 5,
-        "search_rate_delay": 5.0,
-        "search_max_concurrent": 1,
-        "search_retry_count": 3,
-        "search_retry_base_delay": 10.0,
-        "search_timeout": 30,
+        "timeout": defaults.get(existing_config, "timeout"),
+        "max_turns": defaults.get(existing_config, "max_turns"),
+        "max_result_chars": defaults.DEFAULTS["max_result_chars"],
+        "auto_approve_default": defaults.DEFAULTS["auto_approve_default"],
+        "use_sandbox_default": defaults.DEFAULTS["use_sandbox_default"],
+        "search_rate_limit": defaults.DEFAULTS["search_rate_limit"],
+        "search_rate_delay": defaults.DEFAULTS["search_rate_delay"],
+        "search_max_concurrent": defaults.DEFAULTS["search_max_concurrent"],
+        "search_retry_count": defaults.DEFAULTS["search_retry_count"],
+        "search_retry_base_delay": defaults.DEFAULTS["search_retry_base_delay"],
+        "search_timeout": defaults.DEFAULTS["search_timeout"],
     }
 
     config_path.parent.mkdir(parents=True, exist_ok=True)

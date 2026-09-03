@@ -90,7 +90,8 @@ class LlamaCppDriver(BaseApiDriver):
         if await self.is_running():
             return True, "Daemon is already running."
 
-        server_path = self.config.get("server_path", "llama-server")
+        # Add os.path.expanduser here:
+        server_path = os.path.expanduser(self.config.get("server_path", "llama-server"))
         models_dir = os.path.expanduser(self.config.get("models_dir", ""))
         api_base = self.config.get("api_base", "http://localhost:9931/v1")
         parsed = urllib.parse.urlparse(api_base)
@@ -374,37 +375,49 @@ class LlamaCppDriver(BaseApiDriver):
             available if not model_name else [model_name]
         )
 
+        # Query static metadata for all models once without triggering VRAM loads
+        v1_meta = {}
+        try:
+            r = await asyncio.to_thread(requests.get, f"{api_base}/v1/models", timeout=3)
+            if r.status_code == 200:
+                for entry in r.json().get("data", []):
+                    mid = entry.get("id")
+                    if mid and "meta" in entry and entry["meta"]:
+                        v1_meta[mid] = entry["meta"]
+        except Exception:
+            pass
+
         for m in target_models:
+            is_loaded = m in loaded
             m_info: Dict[str, Any] = {
-                "loaded": m in loaded,
+                "loaded": is_loaded,
                 "preset": dict(parser.items(m)) if parser.has_section(m) else {}
             }
 
-            # Query props
-            try:
-                encoded = urllib.parse.quote(m)
-                r = await asyncio.to_thread(requests.get, f"{api_base}/props?model={encoded}", timeout=2)
-                if r.status_code == 200:
-                    data = r.json()
-                    gen = data.get("default_generation_settings", {})
-                    m_info["n_ctx"] = gen.get("n_ctx")
-                    m_info["params"] = gen.get("params", {})
-                    m_info["modalities"] = data.get("modalities", {})
-            except Exception:
-                pass
+            # CRITICAL: ONLY query /props if model is already loaded in memory
+            # Querying /props on an unloaded model forces llama-server to load it!
+            if is_loaded:
+                try:
+                    encoded = urllib.parse.quote(m)
+                    r = await asyncio.to_thread(requests.get, f"{api_base}/props?model={encoded}", timeout=2)
+                    if r.status_code == 200:
+                        data = r.json()
+                        gen = data.get("default_generation_settings", {})
+                        m_info["n_ctx"] = gen.get("n_ctx")
+                        m_info["params"] = gen.get("params", {})
+                        m_info["modalities"] = data.get("modalities", {})
+                except Exception:
+                    pass
 
-            # Query model meta
-            try:
-                r = await asyncio.to_thread(requests.get, f"{api_base}/v1/models", timeout=2)
-                if r.status_code == 200:
-                    for entry in r.json().get("data", []):
-                        if entry.get("id") == m and "meta" in entry and entry["meta"]:
-                            meta = entry["meta"]
-                            m_info["n_ctx_train"] = meta.get("n_ctx_train")
-                            m_info["n_params"] = meta.get("n_params")
-                            m_info["size_bytes"] = meta.get("size")
-            except Exception:
-                pass
+            # Safe static metadata from /v1/models
+            if m in v1_meta:
+                meta = v1_meta[m]
+                if meta.get("n_ctx_train"):
+                    m_info["n_ctx_train"] = meta.get("n_ctx_train")
+                if meta.get("n_params"):
+                    m_info["n_params"] = meta.get("n_params")
+                if meta.get("size"):
+                    m_info["size_bytes"] = meta.get("size")
 
             info["models"][m] = m_info
 

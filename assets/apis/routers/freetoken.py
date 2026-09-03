@@ -3,7 +3,9 @@ import signal
 import asyncio
 import requests
 import subprocess
+import json
 from pathlib import Path
+from typing import Dict, Any, Tuple
 from assets.core.registry import ask_api
 from assets.apis.base import BaseApiDriver
 
@@ -19,19 +21,59 @@ class FreeTokenDriver(BaseApiDriver):
         parsed = urllib.parse.urlparse(api_base)
         return str(parsed.port) if parsed.port else "8000"
 
+    def _get_presets_path(self) -> Path:
+        presets_dir = Path.home() / ".local" / "share" / "ask" / "presets"
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        return presets_dir / "freetoken.json"
+
+    def _normalize_ft_key(self, k: str) -> str:
+        k = k.lower().replace("_", "-").lstrip("-")
+        mapping = {
+            "c": "num-tokens",
+            "ctx": "num-tokens",
+            "tokens": "num-tokens",
+            "num-tokens": "num-tokens",
+            "max-tokens": "max-seq-len-override",
+            "max-seq-len": "max-seq-len-override",
+            "max-seq-len-override": "max-seq-len-override",
+            "requests": "max-running-requests",
+            "max-requests": "max-running-requests",
+            "max-running-requests": "max-running-requests",
+            "prefill": "max-prefill-length",
+            "max-prefill": "max-prefill-length",
+            "gpu": "gpu",
+            "gpu-util": "gpu-memory-utilization",
+            "gpu-memory-utilization": "gpu-memory-utilization",
+            "tp": "tensor-parallel-size"
+        }
+        return mapping.get(k, k)
+
+    def _sync_active_port(self, port: Any):
+        if not port:
+            return
+        port_str = str(port)
+        new_api_base = f"http://localhost:{port_str}/v1"
+        self.config["api_base"] = new_api_base
+        if self.ctx and hasattr(self.ctx, "config"):
+            self.ctx.config["api_base"] = new_api_base
+
     async def is_running(self) -> bool:
-        # Check either the control plane (port 1900) or the serve endpoint (port 8000)
-        urls_to_test = [
-            f"{self._control_url()}/health",
-            f"{self.config.get('api_base', 'http://localhost:8000/v1')}/models"
-        ]
-        for url in urls_to_test:
-            try:
-                r = await asyncio.to_thread(requests.get, url, timeout=2)
-                if r.status_code in (200, 401, 403):
-                    return True
-            except Exception:
-                pass
+        # Check control plane health first
+        try:
+            r = await asyncio.to_thread(requests.get, f"{self._control_url()}/health", timeout=2)
+            if r.status_code in (200, 401, 403):
+                return True
+        except Exception:
+            pass
+
+        # Fallback check inference endpoint
+        api_base = self.config.get("api_base", "http://localhost:8000/v1")
+        try:
+            r = await asyncio.to_thread(requests.get, f"{api_base}/models", timeout=2)
+            if r.status_code in (200, 401, 403):
+                return True
+        except Exception:
+            pass
         return False
 
     def _get_pid_file(self) -> Path:
@@ -83,8 +125,6 @@ class FreeTokenDriver(BaseApiDriver):
             return []
 
         models = set()
-
-        # 1. Scan configured models_dir for available model folders/checkpoints
         models_dir = os.path.expanduser(self.config.get("models_dir", "~/models"))
         p = Path(models_dir)
         if p.exists():
@@ -92,7 +132,6 @@ class FreeTokenDriver(BaseApiDriver):
                 if not item.name.startswith("."):
                     models.add(item.name)
 
-        # 2. Include live running model if active
         try:
             r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/status", timeout=1)
             if r.status_code == 200:
@@ -115,12 +154,31 @@ class FreeTokenDriver(BaseApiDriver):
             r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/status", timeout=1)
             if r.status_code == 200:
                 status = r.json()
-                if status.get("running") and status.get("model"):
-                    raw = status["model"]
-                    models_dir = os.path.expanduser(self.config.get("models_dir", "~/models"))
-                    if raw.startswith(models_dir):
-                        raw = str(Path(raw).relative_to(Path(models_dir)))
-                    return [raw]
+                if status.get("running") and status.get("model") and status.get("lastExitCode") in (None, 0):
+                    port = status.get("port") or self._serve_port()
+                    self._sync_active_port(port)
+
+                    # Verify that ft serve is actually responsive before declaring it loaded
+                    serve_healthy = False
+                    try:
+                        hr = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/health", timeout=1)
+                        serve_healthy = (hr.status_code == 200)
+                    except Exception:
+                        pass
+
+                    if not serve_healthy:
+                        try:
+                            pr = await asyncio.to_thread(requests.get, f"http://localhost:{port}/v1/models", timeout=1)
+                            serve_healthy = (pr.status_code == 200)
+                        except Exception:
+                            pass
+
+                    if serve_healthy:
+                        raw = status["model"]
+                        models_dir = os.path.expanduser(self.config.get("models_dir", "~/models"))
+                        if raw.startswith(models_dir):
+                            raw = str(Path(raw).relative_to(Path(models_dir)))
+                        return [raw]
         except Exception:
             pass
         return []
@@ -132,7 +190,6 @@ class FreeTokenDriver(BaseApiDriver):
         target = model_name
         available = await self.list_available_models()
 
-        # Support selection by index number
         if target.isdigit():
             idx = int(target) - 1
             if 0 <= idx < len(available):
@@ -140,17 +197,29 @@ class FreeTokenDriver(BaseApiDriver):
             else:
                 return False, f"Invalid model index {model_name}. Available range: 1-{len(available)}."
 
-        # Resolve full path from models_dir if it exists
         models_dir = os.path.expanduser(self.config.get("models_dir", "~/models"))
         candidate = Path(models_dir) / target
-        if candidate.exists():
-            target_path = str(candidate)
-        else:
-            target_path = target
-
+        target_path = str(candidate) if candidate.exists() else target
         port = int(self._serve_port())
 
-        # Check current status
+        # Build ft serve flags from presets
+        preset_file = self._get_presets_path()
+        saved_presets = json.loads(preset_file.read_text()) if preset_file.exists() else {}
+        merged_preset = {**saved_presets.get("*", {}), **saved_presets.get(target, {})}
+
+        # Default to 1 slot to maximize KV cache allocation
+        if "max-running-requests" not in merged_preset:
+            merged_preset["max-running-requests"] = "1"
+
+        ft_args = []
+        for k, v in merged_preset.items():
+            flag = f"--{k}" if not k.startswith("-") else k
+            if v and str(v).lower() not in ("true", "on"):
+                ft_args.extend([flag, str(v)])
+            elif str(v).lower() in ("true", "on"):
+                ft_args.append(flag)
+
+        # Check if daemon already has an engine running
         is_already_running = False
         try:
             r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/status", timeout=2)
@@ -159,9 +228,8 @@ class FreeTokenDriver(BaseApiDriver):
         except Exception:
             pass
 
-        # Force restart any stalled or maintenance-failed instance
         endpoint = "/engine/switch" if is_already_running else "/engine/start"
-        payload = {"model": target_path, "port": port, "args": [], "force": True}
+        payload = {"model": target_path, "port": port, "args": ft_args, "force": True}
 
         try:
             r = await asyncio.to_thread(
@@ -175,40 +243,30 @@ class FreeTokenDriver(BaseApiDriver):
         except Exception as e:
             return False, f"Failed to reach FreeToken daemon: {e}"
 
-        # Wait until inference engine (port 8000) is 100% loaded and returning models
-        api_base = self.config.get("api_base", f"http://localhost:{port}/v1")
-
+        api_base = f"http://localhost:{port}/v1"
+        self._sync_active_port(port)
         from rich.console import Console
         console = Console()
         start_time = asyncio.get_event_loop().time()
-        with console.status(f"[cyan]Loading '{model_name}' into GPU (FreeToken)...[/cyan]"):
+        with console.status(f"[cyan]Loading '{model_name}' (args: {' '.join(ft_args)})...[/cyan]"):
             await asyncio.sleep(2)
             while asyncio.get_event_loop().time() - start_time < 120:
                 try:
                     r = await asyncio.to_thread(requests.get, f"{api_base}/models", timeout=2)
-                    # When weights are ready, FreeToken returns 200 with data list
                     if r.status_code == 200:
                         data = r.json().get("data", [])
                         if data and any(m.get("id") for m in data):
+                            self._sync_active_port(port)
                             return True, f"FreeToken model '{model_name}' is ready on port {port}."
                 except Exception:
                     pass
 
-                # Check if daemon reports a crash or exit
                 try:
                     r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/status", timeout=2)
                     if r.status_code == 200:
                         status = r.json()
                         if not status.get("running") and status.get("lastExitCode") not in (None, 0):
-                            return False, f"FreeToken engine exited with code {status.get('lastExitCode')}. Check 'ft daemon logs' for details."
-                except Exception:
-                    pass
-
-                # Check if serve port is reporting maintenance failure
-                try:
-                    r = await asyncio.to_thread(requests.get, f"{api_base}/models", timeout=2)
-                    if r.status_code == 503 and "maintenance failed" in r.text.lower():
-                        return False, "FreeToken serve failed during initialization (maintenance failed). Check 'ft daemon logs'."
+                            return False, f"FreeToken engine exited with code {status.get('lastExitCode')}. Check logs."
                 except Exception:
                     pass
 
@@ -226,43 +284,52 @@ class FreeTokenDriver(BaseApiDriver):
             return False, f"Failed to stop FreeToken serve: {e}"
 
     async def get_context_limit(self, model_name: str) -> int:
-        # 1. Query live engine stats from FreeToken daemon control plane
+        # 1. Check preset override (max-seq-len-override)
+        preset_file = self._get_presets_path()
+        saved_presets = json.loads(preset_file.read_text()) if preset_file.exists() else {}
+        preset = {**saved_presets.get("*", {}), **saved_presets.get(model_name, {})}
+        if "max-seq-len-override" in preset:
+            try:
+                return int(preset["max-seq-len-override"])
+            except ValueError:
+                pass
+
+        if not await self.is_running():
+            return self.config.get("max_tokens", 8192)
+
+        api_base = self.config.get("api_base", "http://localhost:8000/v1")
+
+        # 2. Query /v1/models for model metadata (n_ctx_train)
         try:
-            r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/stats", timeout=2)
+            r = await asyncio.to_thread(requests.get, f"{api_base}/models", timeout=2)
             if r.status_code == 200:
-                stats = r.json()
-                # Extract true active KV cache token limit or max_seq_len
-                limit = stats.get("max_seq_len") or stats.get("kv_cache_tokens") or stats.get("max_context_length")
-                if limit and int(limit) > 0:
-                    return int(limit)
+                data = r.json().get("data", [])
+                for entry in data:
+                    if entry.get("id") == model_name:
+                        meta = entry.get("meta", {})
+                        # n_ctx_train is the native context length
+                        if meta.get("n_ctx_train") and int(meta["n_ctx_train"]) > 0:
+                            return int(meta["n_ctx_train"])
+                        # Also check top-level fields
+                        for key in ["max_context_length", "context_length"]:
+                            if entry.get(key) and int(entry[key]) > 0:
+                                return int(entry[key])
         except Exception:
             pass
 
-        # 2. Query direct serve stats
+        # 3. Query /engine/status to get the loaded model's max_seq_len_override
         try:
-            api_base = self.config.get("api_base", "http://localhost:8000/v1").removesuffix("/v1")
-            r = await asyncio.to_thread(requests.get, f"{api_base}/v1/stats", timeout=2)
+            r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/status", timeout=2)
             if r.status_code == 200:
-                stats = r.json()
-                limit = stats.get("max_seq_len") or stats.get("kv_cache_tokens")
-                if limit and int(limit) > 0:
-                    return int(limit)
+                status = r.json()
+                # Some versions expose max_seq_len_override in status
+                if status.get("max_seq_len_override") and int(status["max_seq_len_override"]) > 0:
+                    return int(status["max_seq_len_override"])
         except Exception:
             pass
 
-        def _get_presets_path(self) -> Path:
-        presets_dir = Path.home() / ".local" / "share" / "ask" / "presets"
-        presets_dir.mkdir(parents=True, exist_ok=True)
-        return presets_dir / "freetoken.json"
-
-    def _normalize_ft_key(self, k: str) -> str:
-        k = k.lower().replace("_", "-")
-        mapping = {
-            "c": "max-model-len", "ctx": "max-model-len", "max-tokens": "max-model-len",
-            "gpu": "gpu-memory-utilization", "gpu-util": "gpu-memory-utilization",
-            "tp": "tensor-parallel-size"
-        }
-        return mapping.get(k, k)
+        # 4. Fallback to config default
+        return self.config.get("max_tokens", 8192)
 
     async def get_model_info(self, model_name: str = "") -> dict:
         info = {
@@ -275,14 +342,52 @@ class FreeTokenDriver(BaseApiDriver):
         preset_file = self._get_presets_path()
         saved_presets = json.loads(preset_file.read_text()) if preset_file.exists() else {}
         info["presets"] = saved_presets
+        if "*" in saved_presets:
+            info["global_preset"] = saved_presets["*"]
 
-        if await self.is_running():
-            try:
-                r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/stats", timeout=2)
-                if r.status_code == 200:
-                    info["engine_stats"] = r.json()
-            except Exception:
-                pass
+        if not await self.is_running():
+            return info
+
+        engine_status = {}
+        try:
+            r = await asyncio.to_thread(requests.get, f"{self._control_url()}/engine/status", timeout=2)
+            if r.status_code == 200:
+                engine_status = r.json()
+        except Exception:
+            pass
+
+        available = await self.list_available_models()
+        loaded = await self.list_loaded_models()
+
+        target_models = [model_name] if model_name and model_name in available else (
+            available if not model_name else [model_name]
+        )
+
+        for m in target_models:
+            is_loaded = m in loaded
+            preset = saved_presets.get(m, {})
+            m_info = {
+                "loaded": is_loaded,
+                "preset": preset
+            }
+
+            if is_loaded:
+                m_info["n_ctx"] = await self.get_context_limit(m)
+                params = {}
+                if engine_status.get("port"):
+                    params["port"] = engine_status.get("port")
+                if engine_status.get("args"):
+                    params["args"] = " ".join(engine_status.get("args")) if isinstance(engine_status.get("args"), list) else str(engine_status.get("args"))
+
+                for k, v in preset.items():
+                    if k not in params:
+                        params[k] = v
+
+                if params:
+                    m_info["params"] = params
+
+            info["models"][m] = m_info
+
         return info
 
     async def set_model_config(self, model_name: str, settings: dict) -> tuple[bool, str]:
@@ -299,16 +404,36 @@ class FreeTokenDriver(BaseApiDriver):
 
         preset_file.write_text(json.dumps(presets, indent=2))
 
-        # If model is currently loaded, switch it
+        # Hot-reload if model is currently loaded
         loaded = await self.list_loaded_models()
-        if target in loaded:
-            await self.load_model(target)
-            return True, f"Updated FreeToken preset for '{target}' and restarted engine."
+        if target in loaded or (target == "*" and loaded):
+            reload_target = loaded[0] if target == "*" else target
+            await self.load_model(reload_target)
+            return True, f"Updated FreeToken preset for '{target}' and hot-reloaded model in memory."
 
         return True, f"Saved FreeToken preset for '{target}'."
 
+    async def list_presets(self) -> Dict[str, Dict[str, str]]:
+        preset_file = self._get_presets_path()
+        try:
+            return json.loads(preset_file.read_text())
+        except Exception:
+            return {}
+
+    async def save_preset(self, name: str, settings: Dict[str, str]) -> Tuple[bool, str]:
+        preset_file = self._get_presets_path()
+        presets = await self.list_presets()
+        presets[name] = {self._normalize_ft_key(k): str(v) for k, v in settings.items()}
+        preset_file.write_text(json.dumps(presets, indent=2))
+        return True, f"Saved FreeToken preset template '@{name}'."
+
+    async def reload_router(self) -> Tuple[bool, str]:
+        loaded = await self.list_loaded_models()
+        if loaded:
+            return await self.load_model(loaded[0])
+        return True, "FreeToken configuration refreshed."
+
     async def measure_tokens(self, model_name: str, messages: list) -> int:
-        # Pre-check tokenization using FreeToken's native tokenize endpoint if available
         api_base = self.config.get("api_base", "http://localhost:8000/v1")
         payload = {"model": model_name, "messages": messages}
         for endpoint in [f"{api_base}/tokenize", f"{api_base}/chat/completions/input_tokens"]:
