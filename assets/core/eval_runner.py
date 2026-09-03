@@ -4,6 +4,7 @@ import json
 import requests
 from rich.console import Console
 from assets.core.registry import EVAL_REGISTRY, EvalResult
+from assets.core import defaults
 from datetime import datetime
 
 console = Console()
@@ -114,14 +115,14 @@ async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict)
         payload["reasoning_budget"] = config["reasoning_budget"]
 
     # Dynamic timeout (default to ctx timeout, fallback to 60s)
-    timeout = config.get("timeout", ctx.config.get("timeout", 60000) / 1000.0)
+    timeout = config.get("timeout", defaults.get(ctx.config, "timeout") / 1000.0)
     if timeout < 1: timeout = 60
 
     try:
         r = await asyncio.to_thread(
             requests.post,
             f"{ctx.config['api_base']}/chat/completions",
-            headers={"Authorization": f"Bearer {ctx.config.get('api_key', '')}"},
+            headers={"Authorization": f"Bearer {defaults.get(ctx.config, 'api_key')}"},
             json=payload,
             timeout=timeout
         )

@@ -19,54 +19,55 @@ See `docs/providers.md` for the full probe/backend surface.
 
 ## Options
 
-Two different "defaults" exist for most keys, so the table lists both:
+Every default below is defined once, in `assets/core/defaults.py`, and read
+through its `get()` helper. Call sites must not hardcode their own fallback
+literals for these keys.
 
-- **OOBE** — the value `oobe.py` stamps into a fresh `config.json`.
-- **Fallback** — the value used at runtime when the key is *absent* (e.g. a
-  hand-written config). Where these disagree, see KNOWN DRIFT.
-
-| Option | OOBE writes | Runtime fallback | Description |
-|--------|-------------|------------------|-------------|
-| `api_base` | per-provider | `""` | LLM API base URL |
-| `api_key` | `""` | `""` | Encrypted API key |
-| `timeout` | `120000` | **none — `KeyError`** | Request timeout (ms) |
-| `max_turns` | `100` | `10` | Maximum autonomous tool loops |
-| `max_result_chars` | `10000` | — | Max output characters before truncation |
-| `auto_approve_default` | `false` | `false` | Auto-approve safe commands |
-| `use_sandbox_default` | `false` | `false` | Run in bwrap sandbox |
-| `search_rate_limit` | `5` | `5` | Max searches per minute |
-| `search_rate_delay` | `5.0` | `2.0` | Delay between searches (s) |
-| `search_max_concurrent` | `1` | `1` | Max concurrent searches |
-| `search_retry_count` | `3` | `3` | Max search retries |
-| `search_retry_base_delay` | `10.0` | `1.0` | Base delay for retries (s) |
-| `search_timeout` | `30` | `30` | Search timeout (s) |
-| `webhook_url` | — | unset | Discord webhook URL for `webhook_notify` |
-| `providers` | detected | `{}` | Provider map (see `docs/providers.md`) |
-| `active_provider` | first detected | `""` | Default provider selection |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `api_base` | `http://localhost:9931/v1` | LLM API base URL |
+| `api_key` | `""` | Encrypted API key |
+| `timeout` | `120000` | Request timeout (ms) |
+| `max_turns` | `100` | Maximum autonomous tool loops |
+| `max_result_chars` | `10000` | Max output characters before truncation |
+| `auto_approve_default` | `false` | Auto-approve safe commands |
+| `use_sandbox_default` | `false` | Run in bwrap sandbox |
+| `search_rate_limit` | `5` | Max searches per minute |
+| `search_rate_delay` | `5.0` | Delay between searches (s) |
+| `search_max_concurrent` | `1` | Max concurrent searches |
+| `search_retry_count` | `3` | Max search retries |
+| `search_retry_base_delay` | `10.0` | Base delay for retries (s) |
+| `search_timeout` | `30` | Search timeout (s) |
+| `active_provider` | `""` | Default provider selection |
+| `default_evaluator` | `security_watcher` | Evaluator gating `run` |
+| `webhook_url` | `""` | Discord webhook URL for `webhook_notify` |
+| `providers` | `{}` | Provider map (see `docs/providers.md`) |
 
 ### Per-evaluator overrides (`evaluators.<name>.*`)
+
+These are read from an evaluator's own config dict, not the global config, so
+they are intentionally NOT in `DEFAULTS`:
 
 | Key | Default | Notes |
 | --- | --- | --- |
 | `model_override` | unset | Route this evaluator to a different model |
 | `api_override` / `api_key_override` | unset | Route this evaluator to a different API |
-| `timeout` | falls back to global `timeout`, else `60000` | Evaluator timeout (ms) |
-| `max_tokens` | unset (per-evaluator decorator may set its own) | Max response tokens |
+| `timeout` | falls back to global `timeout` | Evaluator timeout (ms) |
+| `max_tokens` | unset (a decorator may set its own) | Max response tokens |
 | `post_hooks` | `[]` | Hook names to fire after this evaluator |
 
-## KNOWN DRIFT (unfixed — do not "correct" without checking all sources)
+## Defaults: Single Source of Truth
 
-These values are inconsistent across the codebase. They are recorded as drift,
-NOT resolved, because no single source of truth exists yet.
+Defaults previously drifted across `oobe.py`, `ask.py`, and `context.py` — most
+notably `max_turns` (100 vs 10), `search_rate_delay` (5.0 vs 2.0),
+`search_retry_base_delay` (10.0 vs 1.0), and a `timeout` read with no fallback
+that raised `KeyError` when the key was absent.
 
-- **`timeout`** — OOBE stamps `120000`, but the chat-completion call reads
-  `ctx.config['timeout']` with **no fallback**, so a config missing the key
-  raises `KeyError` mid-request. Evaluators fall back to `60000` instead.
-- **`max_turns`** — OOBE writes `100`; the `ask.py` runtime fallback is `10`.
-  A user who never ran OOBE silently gets **10** turns.
-- **`search_rate_delay`** — OOBE writes `5.0`; runtime fallback is `2.0`.
-- **`search_retry_base_delay`** — OOBE writes `10.0`; runtime fallback is `1.0`.
+All of that is resolved: `assets/core/defaults.py` now owns every global
+default, and `oobe.py` stamps the same values from it, so a config created by
+OOBE and a hand-written config missing a key now agree.
 
-A planned `DEFAULTS` dict (single source of truth) is intended to eliminate this
-class of drift; until then, treat this table as observed behavior and the
-divergences as live bugs.
+**Not governed by `DEFAULTS`** (deliberately): a provider's own `api_base`,
+`api_key`, `models_dir`, `port`, `command`, and `control_base` — those carry
+backend-specific defaults (e.g. FreeToken's `:8000`) that must not be collapsed
+onto the global value.

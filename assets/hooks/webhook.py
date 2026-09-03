@@ -3,6 +3,7 @@ import asyncio
 import requests
 from datetime import datetime, timezone
 from assets.core.registry import ask_hook
+from assets.core import defaults
 from rich.console import Console
 
 console = Console()
@@ -11,7 +12,7 @@ console = Console()
 async def webhook_notify_handler(ctx, eval_name: str, input_data: dict, result):
     # --- NEW: Check evaluator-specific config first, fallback to global ---
     eval_config = ctx.config.get("evaluators", {}).get(eval_name, {})
-    webhook_url = eval_config.get("webhook_url") or ctx.config.get("webhook_url")
+    webhook_url = eval_config.get("webhook_url") or defaults.get(ctx.config, "webhook_url")
 
     if not webhook_url:
         console.print(f"[dim yellow]⚠ Webhook not configured for '{eval_name}'. Skipping notification.[/dim yellow]")

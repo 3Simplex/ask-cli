@@ -2,6 +2,7 @@ import json
 import subprocess
 import asyncio
 from assets.core.registry import ask_tool
+from assets.core import defaults
 from rich.console import Console
 
 console = Console()
@@ -15,9 +16,9 @@ async def search_handler(ctx, agent, args, internal_msgs=None):
     query = args.get('query', '')
     console.print(f"[blue]Searching:[/blue] {query}")
 
-    max_retries = ctx.config.get('search_retry_count', 3)
-    base_delay = ctx.config.get('search_retry_base_delay', 1.0)
-    timeout = ctx.config.get('search_timeout', 30)
+    max_retries = defaults.get(ctx.config, "search_retry_count")
+    base_delay = defaults.get(ctx.config, "search_retry_base_delay")
+    timeout = defaults.get(ctx.config, "search_timeout")
 
     for attempt in range(1, max_retries + 1):
         try:

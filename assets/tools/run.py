@@ -6,6 +6,7 @@ from rich.panel import Panel
 from rich.console import Console
 
 from assets.core.registry import ask_tool
+from assets.core import defaults
 from assets.core.eval_runner import dispatch_evaluator
 
 console = Console()
@@ -21,7 +22,7 @@ async def run_handler(ctx, agent, args, internal_msgs=None):
         return "Error: No command provided."
 
     # Dynamically grab the evaluator name (allows users to override via config)
-    eval_name = ctx.config.get("default_evaluator", "security_watcher")
+    eval_name = defaults.get(ctx.config, "default_evaluator")
 
     # Run through our new engine
     eval_result = await dispatch_evaluator(ctx, eval_name, {"command": cmd}, agent, internal_msgs)
@@ -30,7 +31,7 @@ async def run_handler(ctx, agent, args, internal_msgs=None):
     watch_result = eval_result.reasoning
 
     human_passed = False
-    auto_approve = ctx.config.get('auto_approve_default', False)
+    auto_approve = defaults.get(ctx.config, "auto_approve_default")
 
     async with ctx.ui_lock:
         if auto_approve and watcher_passed:
@@ -54,7 +55,7 @@ async def run_handler(ctx, agent, args, internal_msgs=None):
         return "User denied execution."
 
     try:
-        if ctx.config.get('use_sandbox_default', False):
+        if defaults.get(ctx.config, "use_sandbox_default"):
             cmd_escaped = cmd.replace("'", "'\\''")
             cmd = f"bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /home --tmpfs /root --tmpfs /tmp --unshare-all --die-with-parent -- sh -c '{cmd_escaped}'"
 
