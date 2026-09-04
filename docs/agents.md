@@ -37,3 +37,29 @@ The `description` may reference context providers via `{name}` template syntax
 ```bash
 ask --agent your-agent "hello"
 ```
+
+<!-- BEGIN GENERATED: agents — do not edit, produced by generate_docs.py -->
+
+| Agent | States | Tools |
+| --- | --- | --- |
+| ask | idle, planning, action, review, prune | run, search, read, gc, set_state |
+| dev | initialization, cleanup | run, read, set_state, search, create_state, delete_state, gc |
+| linux | reflex, planning, action, learning | run, search, read, gc, set_state |
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: states — do not edit, produced by generate_docs.py -->
+
+| Agent | State |
+| --- | --- |
+| ask | action |
+| ask | idle |
+| ask | planning |
+| ask | prune |
+| ask | review |
+| dev | cleanup |
+| dev | initialization |
+| linux | action |
+| linux | learning |
+| linux | planning |
+| linux | reflex |
+<!-- END GENERATED -->

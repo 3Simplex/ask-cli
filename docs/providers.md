@@ -77,3 +77,27 @@ ask ──chat──────▶ inference  :8000/v1  (ft serve: the model it
 
 > Not yet implemented (do not rely on it): daemon token auth
 > (`X-FT-Token` / `$FREETOKEN_DAEMON_TOKEN`) is not sent by the harness.
+
+<!-- BEGIN GENERATED: api-drivers — do not edit, produced by generate_docs.py -->
+
+| Driver | Purpose |
+| --- | --- |
+| freetoken-router | Driver for FreeToken inference daemon |
+| llama-cpp | Driver for Llama.cpp multi-model router daemon and llama-server |
+| openai-compatible | Generic driver for OpenAI-compatible REST APIs |
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: ap-commands — do not edit, produced by generate_docs.py -->
+
+| Command | Synopsis |
+| --- | --- |
+| -start | Start router daemon |
+| -stop | Stop router daemon |
+| -load | [model] List or load available model |
+| -unload | [model] List or unload running model |
+| -info | [model] Inspect model configuration & context |
+| -set | <model> <k=v> Set model preset & hot-reload in memory |
+| -reload | Trigger hot-reload of presets |
+| -presets | List saved preset templates |
+| -save | <name> <k=v> Save reusable preset template |
+<!-- END GENERATED -->

@@ -3,6 +3,9 @@
 Routing table for `ask-cli` documentation. **Read the one file that matches your
 task — do not read all of them.** Entry point for coding agents is root `AGENTS.md`.
 
+Tables inside `<!-- BEGIN GENERATED ... -->` markers are derived from source by
+`python3 generate_docs.py`; refresh them with that command (check drift with `--check`).
+
 
 | Task / question | Read |
 | --- | --- |

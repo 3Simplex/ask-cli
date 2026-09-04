@@ -71,3 +71,25 @@ OOBE and a hand-written config missing a key now agree.
 `api_key`, `models_dir`, `port`, `command`, and `control_base` — those carry
 backend-specific defaults (e.g. FreeToken's `:8000`) that must not be collapsed
 onto the global value.
+
+<!-- BEGIN GENERATED: config-keys — do not edit, produced by generate_docs.py -->
+
+| Key | Default |
+| --- | --- |
+| timeout | 120000 |
+| max_turns | 100 |
+| max_result_chars | 10000 |
+| search_rate_limit | 5 |
+| search_rate_delay | 5.0 |
+| search_max_concurrent | 1 |
+| search_retry_count | 3 |
+| search_retry_base_delay | 10.0 |
+| search_timeout | 30 |
+| auto_approve_default | False |
+| use_sandbox_default | False |
+| api_key | "" |
+| api_base | http://localhost:9931/v1 |
+| active_provider | "" |
+| default_evaluator | security_watcher |
+| webhook_url | "" |
+<!-- END GENERATED -->

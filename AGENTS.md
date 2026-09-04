@@ -12,6 +12,7 @@ agents, so keep it thin and capability-free.
 - Run from a dev checkout: `python ask.py "<prompt>"` (also `python oobe.py`)
 - Regenerate the single-file AI context dump: `./generate_manifest.sh`
 - **No automated test suite exists.** Verify changes by running the CLI.
+- Verify docs are not stale: `python3 generate_docs.py --check`
 
 ## PR conventions
 

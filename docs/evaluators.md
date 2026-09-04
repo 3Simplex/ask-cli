@@ -103,3 +103,19 @@ overall star rating, and notes.
 ask -e gold_star_eval "my_session_name"
 ask -e gold_star_eval "my_session_name" --feedback "The agent missed a step"
 ```
+
+<!-- BEGIN GENERATED: evaluators — do not edit, produced by generate_docs.py -->
+
+| Evaluator | Mode | Stateful | Purpose |
+| --- | --- | --- | --- |
+| gold_star_eval | unstructured | False | Reviews an agent session log and scores it against a 5-criterion rubric. |
+| security_watcher | boolean | False | Audits shell commands for privilege escalation, destructive ops, or obfuscation. |
+| state_guard | boolean | True | Determines if the agent is allowed to enter a specific state. |
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: hooks — do not edit, produced by generate_docs.py -->
+
+| Hook | Purpose |
+| --- | --- |
+| webhook_notify | Sends evaluator results to a Discord webhook as an embed. |
+<!-- END GENERATED -->
