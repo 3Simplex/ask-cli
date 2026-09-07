@@ -432,18 +432,3 @@ class FreeTokenDriver(BaseApiDriver):
         if loaded:
             return await self.load_model(loaded[0])
         return True, "FreeToken configuration refreshed."
-
-    async def measure_tokens(self, model_name: str, messages: list) -> int:
-        api_base = self.config.get("api_base", "http://localhost:8000/v1")
-        payload = {"model": model_name, "messages": messages}
-        for endpoint in [f"{api_base}/tokenize", f"{api_base}/chat/completions/input_tokens"]:
-            try:
-                r = await asyncio.to_thread(requests.post, endpoint, json=payload, timeout=2)
-                if r.status_code == 200:
-                    data = r.json()
-                    tokens = data.get("input_tokens") or data.get("tokens") or (len(data.get("tokens", [])) if isinstance(data.get("tokens"), list) else 0)
-                    if tokens:
-                        return int(tokens)
-            except Exception:
-                pass
-        return 0
