@@ -11,7 +11,7 @@ from rich.markdown import Markdown
 # Initialize Architecture
 from assets.context import AskContext
 from assets.core import defaults
-from assets.agent import Agent
+from assets.agent import Agent, scrub_hallucinated_ids
 from assets.core.registry import TOOL_REGISTRY, EVAL_REGISTRY, API_REGISTRY
 
 def _load_api_modules():
@@ -607,6 +607,11 @@ async def main():
                     if "tokens" in loaded:
                         ctx.current_tokens = loaded["tokens"]
                     internal_msgs = loaded.get("messages", [])
+                    if internal_msgs and agent.gc_active():
+                        live_ids = {m.get("id") for m in internal_msgs}
+                        for m in internal_msgs:
+                            if m.get("role") in ("assistant", "user") and m.get("content"):
+                                m["content"] = scrub_hallucinated_ids(m["content"], live_ids)
         except: pass
 
     if not internal_msgs:
@@ -738,7 +743,10 @@ async def main():
             if not response_msg:
                 break
 
-        ast_msg = {"id": gen_id("ast"), "role": "assistant", "content": response_msg.get('content') or "", "gc": False}
+        raw_content = response_msg.get('content') or ""
+        if agent.gc_active():
+            raw_content = scrub_hallucinated_ids(raw_content, {m.get("id") for m in internal_msgs})
+        ast_msg = {"id": gen_id("ast"), "role": "assistant", "content": raw_content, "gc": False}
         if "tool_calls" in response_msg:
             ast_msg["tool_calls"] = response_msg["tool_calls"]
 

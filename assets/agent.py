@@ -8,6 +8,32 @@ import subprocess
 from .core.registry import TOOL_REGISTRY
 from .core.models import ModelResolver
 
+# --- gc ID-hallucination scrub (whitelist form; gate mirrored at call sites) ---
+_ID_BRACKETED = re.compile(r"\[(?P<tok>(?:usr|ast|msg)_[0-9a-f]{6}|sys)\] ?")
+_ID_BARE = re.compile(r"(?<![0-9a-f_])(?:usr|ast|msg)_[0-9a-f]{6}(?![0-9a-f])")
+_CODE_SPAN = re.compile(r"(```.*?```|`[^`\n]*`)", re.S)
+
+def _scrub_segment(text, live_ids):
+    def _bracket(m):
+        return m.group(0) if m.group("tok") in live_ids else ""
+    def _bare(m):
+        return m.group(0) if m.group(0) in live_ids else ""
+    text = _ID_BRACKETED.sub(_bracket, text)
+    text = _ID_BARE.sub(_bare, text)
+    return text
+
+def scrub_hallucinated_ids(content, live_ids):
+    """Strip ID-shaped tokens that are NOT in live_ids, outside code spans.
+    A fabricated reference dies; a real one (matching a live message id) survives.
+    Bracketed removal consumes one trailing space; bare removal leaves spacing."""
+    if not content:
+        return content
+    parts = _CODE_SPAN.split(content)
+    return "".join(
+        p if i % 2 else _scrub_segment(p, live_ids)
+        for i, p in enumerate(parts)
+    )
+
 class Agent:
     async def _resolve_cmd(self, cmd: str) -> str:
         if not cmd: return ""
@@ -118,6 +144,12 @@ class Agent:
         final_context["current_model"] = str(self.ctx.config.get("model", "unknown"))
 
         return final_context
+
+    def gc_active(self) -> bool:
+        """True iff the active state grants the gc tool (static or dynamic)."""
+        all_states = {**self.states, **self.dynamic_states}
+        cfg = all_states.get(self.state_name) or {}
+        return "gc" in cfg.get("allowed_tools", [])
 
     def _inject_ids_inline(self, messages):
         """Prepend message IDs inline to each message's content when gc is available.
