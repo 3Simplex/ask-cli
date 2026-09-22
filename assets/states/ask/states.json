@@ -3,36 +3,31 @@
     "description": "Use when no other state is needed.",
     "system_prompt": "Communicate with the user.",
     "allowed_tools": ["set_state"],
-    "temperature": 0.1,
-    "reasoning_budget": 4096
+    "reasoning": "none"
   },
   "planning": {
-    "description": "Use planning to acomplish goals.",
+    "description": "Use planning to accomplish goals.",
     "system_prompt": "Use deep reasoning to create or refine a step-by-step plan of actions.",
     "allowed_tools": ["read", "search", "set_state"],
-    "temperature": 0.6,
-    "reasoning_budget": 8192
+    "reasoning": "high"
   },
   "action": {
     "description": "Use action to follow the plan.",
     "system_prompt": "Take steps to follow the plan, change to review after a step is complete or if you have trouble.",
     "allowed_tools": ["run", "search", "read", "set_state"],
-    "temperature": 0.1,
-    "reasoning_budget": 4096
+    "reasoning": "low"
   },
   "review": {
     "description": "Use review after an action or planning.",
     "system_prompt": "Analyze the outcome. Decide what to do next.",
     "allowed_tools": ["read", "search", "set_state"],
-    "temperature": 0.1,
-    "reasoning_budget": 4096
+    "reasoning": "medium"
   },
   "prune": {
     "description": "Use prune to prevent oom by cleaning the history.",
     "system_prompt": "Only use tools while in this state. Either use the 'gc' tool on stale and irrelevant messages or get out using 'set_state'.",
     "allowed_tools": ["gc", "set_state"],
     "evaluators": ["state_guard"],
-    "temperature": 0.1,
-    "reasoning_budget": 4096
+    "reasoning": "none"
   }
 }

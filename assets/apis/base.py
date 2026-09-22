@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict, Any
 
+from assets.core.models import GenerationSpec
+
 class BaseApiDriver(ABC):
     """Abstract base class for all API backends and router daemons."""
 
@@ -65,3 +67,18 @@ class BaseApiDriver(ABC):
     async def save_preset(self, name: str, settings: Dict[str, str]) -> Tuple[bool, str]:
         """Save a reusable preset template."""
         return False, f"Saving templates is not supported by driver '{self.name}'."
+
+    def format_completion_payload(self, messages: list, spec: GenerationSpec) -> Dict[str, Any]:
+        """Build the standard OpenAI-compatible completion body from a spec.
+
+        SYNCHRONOUS and side-effect-free. The base/OpenAI dialect is strict: it
+        NEVER emits `reasoning_budget`, `reasoning_effort`, or
+        `chat_template_kwargs`. Thinking-capable routers override this and
+        forward the model-specific keys generically off the spec.
+        """
+        return {
+            "messages": messages,
+            "temperature": spec.temperature,
+            "top_p": spec.top_p,
+            "max_tokens": spec.max_tokens,
+        }

@@ -458,3 +458,26 @@ class LlamaCppDriver(BaseApiDriver):
                 reload_msg = f" (live hot-reloaded '{target_section}' in memory)"
 
         return True, f"Saved preset for [{target_section}]: {expanded_settings}{reload_msg}"
+
+    def format_completion_payload(self, messages: list, spec) -> Dict[str, Any]:
+        """Router dialect: extend the OpenAI body with model-specific keys.
+
+        Forwards the resolver-built template_kwargs VERBATIM (the resolver
+        decides which keys a model declares; this driver never hardcodes the
+        individual thinking-key names). Thinking keys are gated on the model
+        actually supporting thinking so plain models stay clean.
+        """
+        payload = super().format_completion_payload(messages, spec)
+        # Sampling knob sourced by the resolver from the model profile. Emitted
+        # only when the profile declares one, so profiles that omit it keep a
+        # byte-identical body. Deliberately OUTSIDE the supports_thinking gate:
+        # presence_penalty is a sampling knob, not a thinking key. Deliberately
+        # NOT in the strict OpenAI base: the profile value is written in the
+        # llama-family 1.0-based scale, incompatible with OpenAI's -2.0..2.0 one.
+        if spec.presence_penalty is not None:
+            payload["presence_penalty"] = spec.presence_penalty
+        if spec.supports_thinking:
+            if spec.template_kwargs:
+                payload["chat_template_kwargs"] = dict(spec.template_kwargs)
+            payload["reasoning_effort"] = spec.reasoning_effort
+        return payload

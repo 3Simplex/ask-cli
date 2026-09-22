@@ -1,0 +1,22 @@
+{
+  "name": "qwen",
+  "match": ["*qwen*flash*", "*qwen3*"],
+  "supports_thinking": true,
+  "options": {
+    "reasoning": ["none", "low", "medium", "high"]
+  },
+  "thinking_kwargs": {
+    "enable": { "enable_thinking": true, "preserve_thinking": true },
+    "disable": { "enable_thinking": false }
+  },
+  "effort_map": {
+    "none": "none",
+    "low": "low",
+    "medium": "medium",
+    "high": "xhigh"
+  },
+  "sampling": {
+    "none": { "temperature": 0.7, "top_p": 0.80, "presence_penalty": 1.5 },
+    "thinking": { "temperature": 1.0, "top_p": 0.95 }
+  }
+}

@@ -99,26 +99,49 @@ def safe_json_parse(response: str, ctx, evaluator_name: str = "") -> EvalResult:
 async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict) -> EvalResult:
     """Helper for plugins to standardly query the LLM and parse the mode."""
     mode = config.get("mode", "boolean")
-    payload = {
-        "model": ctx.config.get("model"),
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "temperature": config.get("temperature", 0.1)
-    }
-
-    # Dynamically inject tokens/budgets from the plugin config
-    if "max_tokens" in config:
-        payload["max_tokens"] = config["max_tokens"]
-    if "reasoning_budget" in config:
-        payload["reasoning_budget"] = config["reasoning_budget"]
-
-    # Dynamic timeout (default to ctx timeout, fallback to 60s)
-    timeout = config.get("timeout", defaults.get(ctx.config, "timeout") / 1000.0)
-    if timeout < 1: timeout = 60
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
 
     try:
+        # Resolve the generation spec INSIDE the request try: so a future seam
+        # break degrades to a clean "LLM Call failed" FAIL, never an uncaught
+        # crash that launders a safety gate into dispatch_evaluator's catch-all.
+        from assets.core.models import ModelResolver
+        meta = ModelResolver.default_metadata()
+        model_name = ctx.config.get("model", "")
+        if any(k in model_name.lower() for k in ("qwen3", "flash-next", "deepseek-r1", "thinking")):
+            meta["supports_thinking"] = True
+            meta["thinking_kwargs"] = ["enable_thinking", "preserve_thinking"]
+            meta["reasoning_effort_levels"] = ["low", "medium", "xhigh"]
+
+        spec = ModelResolver.resolve(
+            model_target=model_name,
+            model_meta=meta,
+            reasoning_budget=config.get("reasoning_budget", 0),
+            reasoning_intent=config.get("reasoning"),
+            remaining_tokens=config.get("max_tokens", 2048),
+            safety_buffer=0,
+            temperature=config.get("temperature"),
+        )
+
+        driver = getattr(ctx, "driver", None)
+        if driver and hasattr(driver, "format_completion_payload"):
+            payload = driver.format_completion_payload(messages, spec)
+        else:
+            payload = {
+                "messages": messages,
+                "temperature": spec.temperature,
+                "top_p": spec.top_p,
+                "max_tokens": spec.max_tokens,
+            }
+        payload["model"] = model_name
+
+        # Dynamic timeout (default to ctx timeout, fallback to 60s)
+        timeout = config.get("timeout", defaults.get(ctx.config, "timeout") / 1000.0)
+        if timeout < 1: timeout = 60
+
         r = await asyncio.to_thread(
             requests.post,
             f"{ctx.config['api_base']}/chat/completions",

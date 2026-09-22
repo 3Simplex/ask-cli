@@ -1,17 +1,15 @@
 {
   "initialization": {
-    "allowed_tools": [ "create_state", "set_state"],
-    "description": "Generate a dynamic state to acomplish goals.",
-    "reasoning_budget": 8192,
+    "allowed_tools": ["create_state", "set_state"],
+    "description": "Generate a dynamic state to accomplish goals.",
     "system_prompt": "You are in dynamic state initialization mode. Outline a step-by-step plan with tasks required for each state to achieve well defined goals.",
-    "temperature": 0.5
+    "reasoning": "low"
   },
   "cleanup": {
     "allowed_tools": ["delete_state", "set_state", "gc"],
     "description": "Cleanup context or dynamic states.",
-    "reasoning_budget": 4096,
     "system_prompt": "Use the gc tool to reclaim needed context space. Keep relevant information. Use the delete_state tool to remove unwanted dynamic states.",
-    "temperature": 0.1,
-    "evaluators": ["state_guard"]
+    "evaluators": ["state_guard"],
+    "reasoning": "none"
   }
 }

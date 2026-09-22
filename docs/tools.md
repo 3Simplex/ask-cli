@@ -34,7 +34,7 @@ the `@ask_tool` decorator. To add a tool, simply drop the file in
 
 | Tool | Purpose | Args |
 | --- | --- | --- |
-| create_state | Create a dynamic state at runtime with custom context, tools, and prompt. The state persists for the current session. Use this to create highly specialized modes of operation for specific tasks. | name, allowed_tools, description, context_providers, reasoning_budget, temperature, system_prompt |
+| create_state | Create a dynamic state at runtime with custom context, tools, and prompt. The state persists for the current session. Use this to create highly specialized modes of operation for specific tasks. | name, allowed_tools, description, context_providers, reasoning, system_prompt |
 | delete_state | Delete a dynamic state created at runtime. | name |
 | gc | Internal context management: Remove messages by ID to free up your LLM context window. Do NOT use this for Linux system garbage collection. | ids |
 | read | Read the content of a local file or a web page. | target |

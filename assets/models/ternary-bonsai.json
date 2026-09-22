@@ -1,0 +1,21 @@
+{
+  "name": "ternary-bonsai",
+  "match": ["*ternary-bonsai*"],
+  "supports_thinking": true,
+  "options": {
+    "reasoning": ["none", "medium", "high"]
+  },
+  "thinking_kwargs": {
+    "enable": { "enable_thinking": true, "preserve_thinking": true },
+    "disable": { "enable_thinking": false }
+  },
+  "effort_map": {
+    "none": "none",
+    "medium": "medium",
+    "high": "xhigh"
+  },
+  "sampling": {
+    "none": { "temperature": 0.7, "top_p": 0.80, "presence_penalty": 1.5 },
+    "thinking": { "temperature": 1.0, "top_p": 0.95 }
+  }
+}
