@@ -105,6 +105,27 @@ _load_hook_modules()
 
 console = Console()
 
+# --- tool dispatch funnel (lifted from main() verbatim; sole handler-await site) ---
+async def _run_tool(tc, ctx, agent, internal_msgs):
+    name = tc['function']['name']
+    console.print(f"[dim]  → Running: {name}...[/dim]")
+    try:
+        tc_args = json.loads(tc['function']['arguments'])
+    except:
+        tc_args = {}
+    try:
+        if name not in TOOL_REGISTRY:
+            res = f"Unknown tool {name}"
+        elif not agent.is_tool_allowed(name):
+            console.print(f"[bold red]  ✖ Denied: {name} is not permitted in state '{agent.state_name}'.[/bold red]")
+            res = f"Error: Tool '{name}' is not permitted in active state '{agent.state_name}'."
+        else:
+            res = await TOOL_REGISTRY[name]["handler"](ctx, agent, tc_args, internal_msgs)
+    except Exception as e:
+        res = f"Tool Execution Error: {str(e)}"
+    return {"role": "tool", "tool_call_id": tc['id'], "name": name, "content": str(res)}
+
+
 def _resolve_assets_dir():
     """Standardized path resolver matching _load_tool_modules() fallbacks."""
     if path := os.environ.get('ASK_ASSETS_DIR'):
@@ -761,25 +782,10 @@ async def main():
         if "tool_calls" in response_msg:
             console.print(f"\n[bold cyan]🔧 Executing {len(response_msg['tool_calls'])} tool(s)...[/bold cyan]")
 
-            async def run_tool(tc):
-                name = tc['function']['name']
-                console.print(f"[dim]  → Running: {name}...[/dim]")
-                try:
-                    tc_args = json.loads(tc['function']['arguments'])
-                except:
-                    tc_args = {}
-                try:
-                    if name in TOOL_REGISTRY:
-                        res = await TOOL_REGISTRY[name]["handler"](ctx, agent, tc_args, internal_msgs)
-                    else:
-                        res = f"Unknown tool {name}"
-                except Exception as e:
-                    res = f"Tool Execution Error: {str(e)}"
-                return {"role": "tool", "tool_call_id": tc['id'], "name": name, "content": str(res)}
 
             results = []
             for tc in response_msg["tool_calls"]:
-                results.append(await run_tool(tc))
+                results.append(await _run_tool(tc, ctx, agent, internal_msgs))
             internal_msgs.extend(results)
 
             # Filter out gc'd messages so they never appear again

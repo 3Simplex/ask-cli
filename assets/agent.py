@@ -151,6 +151,18 @@ class Agent:
         cfg = all_states.get(self.state_name) or {}
         return "gc" in cfg.get("allowed_tools", [])
 
+    def is_tool_allowed(self, tool_name: str) -> bool:
+        """Effective per-state tool whitelist: the single source of truth.
+
+        Mirrors get_api_payload's assembly rule: an uninitialized agent may
+        only set_state; otherwise the active state's allowed_tools (dynamic
+        shadows static) intersected with the agent profile's tools."
+        """
+        if self.state_name not in self.states and self.state_name not in self.dynamic_states:
+            return tool_name == "set_state"
+        active = self.dynamic_states.get(self.state_name) or self.states.get(self.state_name) or {}
+        return tool_name in active.get("allowed_tools", []) and tool_name in self.profile.get("tools", [])
+
     def _inject_ids_inline(self, messages):
         """Prepend message IDs inline to each message's content when gc is available.
         This gives the agent direct, unambiguous references to messages by ID.
