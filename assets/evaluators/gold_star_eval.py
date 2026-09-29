@@ -13,7 +13,7 @@ from assets.core.eval_runner import safe_json_parse
     mode="unstructured",
     stateful=False,
     max_tokens=4096,
-    reasoning_budget=2048,
+    reasoning="high",
     expected_args={"session_name": str, "feedback": str},
     help_text="Retroactively evaluates an agent session log. Scores task completion, efficiency, safety, communication, and context fit. Returns structured JSON with rubric scores and actionable recommendations.",
     usage="ask -e gold_star_eval <session_name> \"optional user feedback\""

@@ -157,8 +157,6 @@ class ModelResolver:
         remaining_tokens: int = 2048,
         safety_buffer: int = 1000,
         model_meta: Optional[Dict[str, Any]] = None,
-        reasoning_budget: Any = None,
-        **kwargs,
     ) -> GenerationSpec:
         """Resolve a model profile and cognitive intent into a GenerationSpec."""
         if isinstance(model_target, dict):
@@ -167,12 +165,6 @@ class ModelResolver:
         else:
             model_name = str(model_target or "")
             meta = model_meta or {}
-
-        if reasoning_intent is None and reasoning_budget is not None:
-            try:
-                reasoning_intent = "high" if int(reasoning_budget) > 0 else "none"
-            except (TypeError, ValueError):
-                reasoning_intent = "none"
 
         profile = cls.get_profile(model_name)
         intent = reasoning_intent or "none"

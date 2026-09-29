@@ -60,11 +60,24 @@ async def create_state_handler(ctx, agent, args, internal_msgs=None):
         missing = requested_tools - agent_tools
         return f"Error: Tools {missing} are not available to this agent's profile."
 
+    # context_providers is LLM-authored and arrives as "" (or another non-mapping)
+    # when a model is told a state has no providers. Downstream merging uses {**x},
+    # which raises on any non-mapping -- the empty string included. Normalize to {}
+    # at the boundary and report the correction so the caller is not misled.
+    providers = args.get("context_providers")
+    providers_note = ""
+    if providers is not None and not isinstance(providers, dict):
+        providers_note = (
+            f"\n  Note: context_providers arrived as {type(providers).__name__} and was "
+            "ignored; omit the key (do not pass an empty string) when a state needs none."
+        )
+        providers = {}
+
     # Build the state config without model-specific floats or token budgets
     state_config = {
         "allowed_tools": args.get("allowed_tools", []),
         "system_prompt": args.get("system_prompt", ""),
-        "context_providers": args.get("context_providers", {}),
+        "context_providers": providers,
         "reasoning": args.get("reasoning", "none"),
         "description": args.get("description", ""),
     }
@@ -77,4 +90,5 @@ async def create_state_handler(ctx, agent, args, internal_msgs=None):
         f"  Tools: {state_config['allowed_tools']}\n"
         f"  Reasoning: {state_config['reasoning']}\n"
         f"  Description: {state_config['description']}"
+        + providers_note
     )

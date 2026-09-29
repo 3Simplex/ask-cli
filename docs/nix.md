@@ -12,11 +12,16 @@ related: ["config.md"]
 - `packages.<system>.ask-cli` (and `.default`) — built from `./default.nix`
 - `apps.<system>.default` — runs `bin/ask` directly (`nix run .#`)
 
-There is **no** `checks` or `devShells` output, and **no automated test suite**.
+There is **no** `checks` or `devShells` output, so the suite is run by hand against the
+store interpreter rather than by `nix flake check`:
 
 ```bash
 nix build .#ask-cli     # build the package
 nix run .#              # run the CLI from the flake
+
+# tests (from a checkout; no bare python on $PATH, no pytest required)
+PY=$(ls -d /nix/store/*-python3-3.13.12-env/bin/python3 | head -1)
+PYTHONPATH="$PWD" "$PY" -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ## Install Phase (default.nix)
@@ -35,6 +40,12 @@ nix run .#              # run the CLI from the flake
 > Note: `ASK_ASSETS_DIR` points at the `assets/` subdir. The shipped docs live
 > one level up (`$out/share/ask/`), so consumers resolve the parent
 > (`${ASK_ASSETS_DIR%/*}`) to reach `AGENTS.md` / `docs/`.
+
+> Caveat for checkout development: because the wrapper sets `ASK_ASSETS_DIR` into the
+> environment, code that prefers it over its own file location (such as
+> `ModelResolver._get_profiles_dir()`) loads the **store** `assets/models/*.json` and
+> silently ignores working-tree profile edits — failures read as "my profile isn't
+> loading". Run such checks as `env -u ASK_ASSETS_DIR "$PY" …`.
 
 ## Dependencies
 

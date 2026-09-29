@@ -111,19 +111,12 @@ async def llm_eval_call(ctx, system_prompt: str, user_prompt: str, config: dict)
         from assets.core.models import ModelResolver
         meta = ModelResolver.default_metadata()
         model_name = ctx.config.get("model", "")
-        if any(k in model_name.lower() for k in ("qwen3", "flash-next", "deepseek-r1", "thinking")):
-            meta["supports_thinking"] = True
-            meta["thinking_kwargs"] = ["enable_thinking", "preserve_thinking"]
-            meta["reasoning_effort_levels"] = ["low", "medium", "xhigh"]
-
         spec = ModelResolver.resolve(
             model_target=model_name,
             model_meta=meta,
-            reasoning_budget=config.get("reasoning_budget", 0),
-            reasoning_intent=config.get("reasoning"),
+            reasoning_intent=config.get("reasoning", "none"),
             remaining_tokens=config.get("max_tokens", 2048),
             safety_buffer=0,
-            temperature=config.get("temperature"),
         )
 
         driver = getattr(ctx, "driver", None)

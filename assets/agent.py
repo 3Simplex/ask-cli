@@ -92,12 +92,18 @@ class Agent:
         resolved = {}
 
         dynamic_state_cfg = self.dynamic_states.get(self.state_name, {})
-        dynamic_providers = dynamic_state_cfg.get("context_providers", {})
+
+        # Provider tables may be absent OR present-but-not-a-mapping (an LLM-authored
+        # dynamic state can carry context_providers: ""). `{**x}` raises on any
+        # non-mapping, so coerce every source: one malformed blob must not throw out
+        # of the turn-loop for the whole session.
+        def _as_mapping(value):
+            return value if isinstance(value, dict) else {}
 
         all_providers = {
-            **self._raw_commands,
-            **self._state_commands.get(self.state_name, {}),
-            **dynamic_providers
+            **_as_mapping(self._raw_commands),
+            **_as_mapping(self._state_commands.get(self.state_name, {})),
+            **_as_mapping(dynamic_state_cfg.get("context_providers"))
         }
 
         async def resolve_one(key, cfg):
@@ -248,14 +254,6 @@ class Agent:
         except Exception:
             pass
 
-        # Fallback capability inference for models without local directory match
-        if not base.get("supports_thinking") and model:
-            m_lower = model.lower()
-            if any(k in m_lower for k in ("qwen3", "flash-next", "deepseek-r1", "thinking")):
-                base["supports_thinking"] = True
-                base.setdefault("thinking_kwargs", ["enable_thinking", "preserve_thinking"])
-                base.setdefault("reasoning_effort_levels", ["low", "medium", "xhigh"])
-
         try:
             if self.ctx and getattr(self.ctx, "max_tokens", 0):
                 base = ModelResolver.merge_server_metadata(base, n_ctx=self.ctx.max_tokens)
@@ -377,13 +375,11 @@ class Agent:
         # Inject IDs inline into messages (for gc tool)
         messages = self._inject_ids_inline(messages)
 
-        # Turn the state's cognitive intent into a driver-agnostic GenerationSpec.
-        # The legacy `reasoning_budget` int is fed straight in: ModelResolver maps
-        # budget>0 -> "high" and budget==0 -> "none", so every existing states.json
-        # keeps working UNCHANGED. The state's own temperature still governs the
-        # wire value (identical to prior behavior); only top_p/max_tokens are new,
-        # and the raw `reasoning_budget` key is no longer emitted to any engine.
-        # Sourced cleanly from state intent; model profile manages all sampling parameters
+        # Turn the state's cognitive intent ("reasoning": none|low|medium|high) into a
+        # driver-agnostic GenerationSpec. The matched model profile is the sole authority
+        # for sampling (temperature, top_p, presence_penalty) and template kwargs; no
+        # per-state sampling value is passed to resolve(). Drivers serialize the spec in
+        # their own dialect, so no raw budget/intent key ever reaches an engine.
         reasoning_intent = templated_state.get("reasoning", "none")
         model_name = (self.ctx.config.get("model") if self.ctx else "") or ""
         spec = ModelResolver.resolve(
@@ -400,6 +396,7 @@ class Agent:
         else:
             payload = {
                 "messages": messages,
+                "model": model_name,
                 "temperature": spec.temperature,
                 "top_p": spec.top_p,
                 "max_tokens": spec.max_tokens,

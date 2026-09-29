@@ -26,7 +26,7 @@ from assets.core.eval_runner import llm_eval_call
     api_override="http://other-api/v1",     # Route to a different API (optional)
     history_window=5,                       # Messages to inject if stateful
     max_tokens=1024,
-    reasoning_budget=1024
+    reasoning="high"                        # cognitive intent: none|low|medium|high (profile decides the wire meaning)
 )
 async def my_guard_handler(ctx, agent, input_data, eval_msgs, config):
     sys_prompt = "You are a judge. Output valid JSON: {\"passed\": true, \"reasoning\": \"...\"}"

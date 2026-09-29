@@ -9,7 +9,7 @@ from assets.core.eval_runner import llm_eval_call
     mode="boolean",
     stateful=False,
     max_tokens=2048,
-    reasoning_budget=2048,
+    reasoning="high",
     expected_args={"command": str},
     help_text="Monitors shell commands for privilege escalation, destructive operations, and obfuscation. Logs decisions to ~/.local/share/ask/security_audit/audit_log.jsonl.",
     usage="ask -e security_watcher 'ls -la /' "

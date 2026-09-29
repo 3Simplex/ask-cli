@@ -15,6 +15,7 @@ Tables inside `<!-- BEGIN GENERATED ... -->` markers are derived from source by
 | Context providers, refresh modes, `{template}` syntax | `docs/context-providers.md` |
 | Evaluators and post-evaluation hooks | `docs/evaluators.md` |
 | API backends, `-ap` surface, presets, two-plane model | `docs/providers.md` |
+| Model profiles, declarative capabilities, reasoning-intent resolution (`assets/models/*.json`) | `docs/states.md` |
 | Session persistence and `-c` resume | `docs/sessions.md` |
 | `config.json` keys and defaults | `docs/config.md` |
 | Nix build / install / packaging | `docs/nix.md` |
